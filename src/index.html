@@ -58,6 +58,14 @@
     <p id="licDev" style="color:#9aa6b3; font-size:11px; margin:14px 0 0;"></p>
   </div>
 </div>
+<!-- 更新バナー（アプリ内・確実に表示） -->
+<div id="updBanner" style="display:none; position:fixed; left:0; right:0; bottom:0; z-index:9998; background:#1f6feb; color:#fff; padding:12px 20px; align-items:center; justify-content:center; gap:14px; box-shadow:0 -2px 10px rgba(0,0,0,.15); font-size:14px;">
+  <span id="updBannerMsg">新しいバージョンがあります</span>
+  <button id="updNow" style="background:#fff; color:#1f6feb; border:0; border-radius:6px; padding:7px 14px; font-size:13px; cursor:pointer;">今すぐ更新</button>
+  <button id="updLater" style="background:transparent; color:#fff; border:1px solid #ffffff88; border-radius:6px; padding:7px 12px; font-size:13px; cursor:pointer;">後で</button>
+</div>
+<!-- 通知トースト -->
+<div id="toast" style="display:none; position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:9998; background:#1c2530; color:#fff; padding:9px 16px; border-radius:8px; font-size:13px; box-shadow:0 2px 10px rgba(0,0,0,.2);"></div>
 <header>
   <h1>🎙️ 音声入力 → 弥生CSV（小口現金・お試し版）</h1>
   <p>言ったことだけを構造化します。勘定科目の自動推測はしません。<span id="appVer" style="margin-left:10px; opacity:.7; font-size:11px;"></span></p>
@@ -505,20 +513,33 @@ $('excelBtn').onclick = ()=>{
 render();
 
 // ───────── 自動アップデート（デスクトップアプリ内のみ） ─────────
+function toast(msg, ms){
+  const t = document.getElementById('toast'); if(!t) return;
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(window.__toastT); window.__toastT = setTimeout(()=>{ t.style.display='none'; }, ms||3500);
+}
+function showUpdateBanner(ver){
+  const b = document.getElementById('updBanner');
+  const msg = document.getElementById('updBannerMsg');
+  const now = document.getElementById('updNow'), later = document.getElementById('updLater');
+  msg.textContent = '新しいバージョン ' + ver + ' があります';
+  now.disabled = false; later.disabled = false; b.style.display = 'flex';
+  now.onclick = async ()=>{
+    now.disabled = true; later.disabled = true;
+    msg.textContent = '更新中… 完了後に自動で再起動します';
+    try { await window.__TAURI__.core.invoke('install_update'); }
+    catch(e){ msg.textContent = '更新に失敗しました: ' + e; now.disabled=false; later.disabled=false; }
+  };
+  later.onclick = ()=>{ b.style.display = 'none'; };
+}
 async function checkForUpdate(silent){
   const T = window.__TAURI__;
-  if(!T || !T.core){ if(!silent) alert('この環境ではアップデート確認は使えません（ブラウザ表示時など）'); return; }
+  if(!T || !T.core){ if(!silent) toast('この環境では更新確認できません'); return; }
   let ver;
   try { ver = await T.core.invoke('check_update'); }
-  catch(e){ if(!silent) alert('アップデート確認に失敗しました: '+e); else console.warn('update check failed', e); return; }
-  if(ver){
-    if(confirm('新しいバージョン '+ver+' があります。今すぐ更新しますか？\n（更新後、自動で再起動します）')){
-      try { await T.core.invoke('install_update'); }
-      catch(e){ alert('更新に失敗しました: '+e); }
-    }
-  } else if(!silent){
-    alert('お使いのバージョンは最新です。');
-  }
+  catch(e){ if(!silent) toast('更新確認に失敗しました: ' + e); else console.warn('update check failed', e); return; }
+  if(ver){ showUpdateBanner(ver); }
+  else if(!silent){ toast('お使いのバージョンは最新です'); }
 }
 if(window.__TAURI__){
   const ub = document.getElementById('updBtn');
