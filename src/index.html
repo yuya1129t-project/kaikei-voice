@@ -507,18 +507,18 @@ render();
 // ───────── 自動アップデート（デスクトップアプリ内のみ） ─────────
 async function checkForUpdate(silent){
   const T = window.__TAURI__;
-  if(!T || !T.updater){ if(!silent) alert('この環境ではアップデート確認は使えません（ブラウザ表示時など）'); return; }
-  try {
-    const update = await T.updater.check();
-    if(update && update.available){
-      if(confirm('新しいバージョン '+update.version+' があります。今すぐ更新しますか？\n（ダウンロード後、自動で再起動します）')){
-        await update.downloadAndInstall();
-        if(T.process && T.process.relaunch) await T.process.relaunch();
-      }
-    } else if(!silent){
-      alert('お使いのバージョンが最新です。');
+  if(!T || !T.core){ if(!silent) alert('この環境ではアップデート確認は使えません（ブラウザ表示時など）'); return; }
+  let ver;
+  try { ver = await T.core.invoke('check_update'); }
+  catch(e){ if(!silent) alert('アップデート確認に失敗しました: '+e); else console.warn('update check failed', e); return; }
+  if(ver){
+    if(confirm('新しいバージョン '+ver+' があります。今すぐ更新しますか？\n（更新後、自動で再起動します）')){
+      try { await T.core.invoke('install_update'); }
+      catch(e){ alert('更新に失敗しました: '+e); }
     }
-  } catch(e){ if(!silent) alert('アップデート確認に失敗しました: '+e); else console.warn('update check failed', e); }
+  } else if(!silent){
+    alert('お使いのバージョンは最新です。');
+  }
 }
 if(window.__TAURI__){
   const ub = document.getElementById('updBtn');

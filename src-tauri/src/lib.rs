@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_updater::UpdaterExt;
 
 const LICENSE_SERVER: &str = "https://kaikei-license.yuya1129t.workers.dev";
 const GRACE_DAYS: i64 = 14;
@@ -173,6 +174,28 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+// 更新確認：新しいバージョンがあればその版番号を返す（無ければ None）
+#[tauri::command]
+async fn check_update(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| e.to_string())?;
+    Ok(update.map(|u| u.version))
+}
+
+// 更新の適用：ダウンロード＆インストールして再起動
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        update
+            .download_and_install(|_chunk, _total| {}, || {})
+            .await
+            .map_err(|e| e.to_string())?;
+        app.restart();
+    }
+    Ok(false)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -181,7 +204,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(Licensed(Mutex::new(false)))
-        .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license, app_version])
+        .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license, app_version, check_update, install_update])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
