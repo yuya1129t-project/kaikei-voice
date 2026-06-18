@@ -137,22 +137,27 @@ async fn check_license(
 }
 
 // ネイティブの保存ダイアログ＋書き出し（ライセンス無効時は拒否）
+// 非同期コマンド＋ノンブロッキングのダイアログにすることで、macOSのメインスレッド
+// ブロック（固まり→強制終了）を回避する。
 #[tauri::command]
-fn save_file(
+async fn save_file(
     app: tauri::AppHandle,
     state: tauri::State<'_, Licensed>,
     default_name: String,
     contents: Vec<u8>,
 ) -> Result<bool, String> {
-    if !*state.0.lock().unwrap() {
+    let licensed = *state.0.lock().unwrap();
+    if !licensed {
         return Err("ライセンスが有効ではありません".into());
     }
-    let picked = app
-        .dialog()
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
         .file()
         .set_file_name(&default_name)
-        .blocking_save_file();
-    match picked {
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+    match rx.await.map_err(|e| e.to_string())? {
         Some(fp) => {
             let path = fp.into_path().map_err(|e| e.to_string())?;
             std::fs::write(&path, &contents).map_err(|e| e.to_string())?;
