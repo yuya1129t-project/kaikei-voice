@@ -60,7 +60,7 @@
 </div>
 <header>
   <h1>🎙️ 音声入力 → 弥生CSV（小口現金・お試し版）</h1>
-  <p>言ったことだけを構造化します。勘定科目の自動推測はしません。</p>
+  <p>言ったことだけを構造化します。勘定科目の自動推測はしません。<span id="appVer" style="margin-left:10px; opacity:.7; font-size:11px;"></span></p>
 </header>
 
 <main>
@@ -564,7 +564,10 @@ async function gateLicense(){
   btn.onclick = submit;
   inp.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
 }
-if(window.__TAURI__){ gateLicense(); }
+if(window.__TAURI__){
+  gateLicense();
+  window.__TAURI__.core.invoke('app_version').then(v=>{ const e=document.getElementById('appVer'); if(e) e.textContent='ver. '+v; }).catch(()=>{});
+}
 </script>
 </body>
 </html>

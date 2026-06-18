@@ -1,6 +1,7 @@
 name: Release (signed, auto-update)
 
-# v0.1.2 などのタグを push するとリリースを作成・署名・latest.json を公開
+# v0.1.5 などのタグを push すると、Windows版とMac版をビルド・署名し、
+# GitHub Release に latest.json 付きで公開する（自動アップデート用）。
 on:
   push:
     tags: ['v*']
@@ -9,8 +10,18 @@ permissions:
   contents: write
 
 jobs:
-  release-windows:
-    runs-on: windows-latest
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+            rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - platform: windows-latest
+            args: ''
+            rust_targets: ''
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
@@ -21,6 +32,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -42,3 +55,4 @@ jobs:
           releaseBody: '自動アップデート対応リリース。'
           releaseDraft: false
           prerelease: false
+          args: ${{ matrix.args }}

@@ -167,6 +167,12 @@ async fn save_file(
     }
 }
 
+// アプリのバージョン（画面表示・更新確認用）
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -175,7 +181,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(Licensed(Mutex::new(false)))
-        .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license])
+        .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license, app_version])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
