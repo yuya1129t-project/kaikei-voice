@@ -29,6 +29,9 @@ jobs:
         run: npm install
 
       - name: Build (Tauri / Windows)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
       # 出来上がったインストーラ(.exe / .msi)をダウンロード可能な成果物として保存

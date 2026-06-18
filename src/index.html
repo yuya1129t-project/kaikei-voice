@@ -45,6 +45,19 @@
 </style>
 </head>
 <body>
+<!-- ライセンス認証ゲート（デスクトップアプリ内でのみ表示） -->
+<div id="licenseGate" style="display:none; position:fixed; inset:0; background:#f4f6f9; z-index:9999; align-items:center; justify-content:center;">
+  <div style="background:#fff; width:440px; max-width:90%; padding:28px; border-radius:12px; box-shadow:0 6px 24px rgba(0,0,0,.14); text-align:center;">
+    <div style="font-size:22px; margin-bottom:6px;">🔑</div>
+    <h2 style="margin:0 0 6px; font-size:18px; color:#1c2530;">ライセンス認証</h2>
+    <p style="color:#5a6675; font-size:13px; margin:0 0 16px;">ライセンスキーを入力してください。</p>
+    <input id="licKey" placeholder="KAIKEI-XXXX-XXXX-XXXX-XXXX" autocomplete="off"
+      style="width:100%; box-sizing:border-box; padding:11px; font-size:15px; border:1px solid #cdd5df; border-radius:8px; text-align:center; letter-spacing:1px;">
+    <div id="licMsg" style="font-size:12px; min-height:18px; margin:8px 0; color:#e8484c;"></div>
+    <button id="licBtn" class="primary" style="width:100%; padding:11px; font-size:15px;">認証する</button>
+    <p id="licDev" style="color:#9aa6b3; font-size:11px; margin:14px 0 0;"></p>
+  </div>
+</div>
 <header>
   <h1>🎙️ 音声入力 → 弥生CSV（小口現金・お試し版）</h1>
   <p>言ったことだけを構造化します。勘定科目の自動推測はしません。</p>
@@ -512,6 +525,46 @@ if(window.__TAURI__){
   if(ub){ ub.style.display=''; ub.onclick = ()=> checkForUpdate(false); }
   setTimeout(()=> checkForUpdate(true), 1500);   // 起動時に静かに確認
 }
+
+// ───────── ライセンス認証ゲート（デスクトップアプリ内のみ） ─────────
+function licErrText(err){
+  const map = {
+    invalid_key:'キーが正しくありません',
+    activation_limit:'このキーは上限台数まで使用済みです（横流し防止）',
+    license_revoked:'このキーは無効化されています',
+    license_expired:'このキーは期限切れです',
+    expired:'このキーは期限切れです',
+    no_license:'ライセンスキーを入力してください',
+    offline_no_grace:'オフラインのため認証できません（ネット接続が必要です）',
+  };
+  return map[err] || ('認証に失敗しました'+(err?'（'+err+'）':''));
+}
+async function gateLicense(){
+  const T = window.__TAURI__;
+  if(!T || !T.core) return;                 // ブラウザ表示時はゲートしない
+  const gate = document.getElementById('licenseGate');
+  gate.style.display = 'flex';              // まず本体を隠す
+  let res;
+  try { res = await T.core.invoke('check_license'); } catch(e){ res = {ok:false, error:String(e)}; }
+  if(res && res.ok){ gate.style.display='none'; return; }   // 認証済み → 本体表示
+  const btn = document.getElementById('licBtn');
+  const inp = document.getElementById('licKey');
+  const msg = document.getElementById('licMsg');
+  inp.focus();
+  const submit = async ()=>{
+    const key = inp.value.trim().toUpperCase();
+    if(!key){ msg.style.color='#e8484c'; msg.textContent='キーを入力してください'; return; }
+    btn.disabled=true; msg.style.color='#5a6675'; msg.textContent='認証中…';
+    let r;
+    try { r = await T.core.invoke('activate_license', { key }); } catch(e){ r = {ok:false, error:String(e)}; }
+    btn.disabled=false;
+    if(r && r.ok){ gate.style.display='none'; }
+    else { msg.style.color='#e8484c'; msg.textContent = licErrText(r && r.error); }
+  };
+  btn.onclick = submit;
+  inp.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
+}
+if(window.__TAURI__){ gateLicense(); }
 </script>
 </body>
 </html>
