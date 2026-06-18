@@ -66,6 +66,14 @@
 </div>
 <!-- 通知トースト -->
 <div id="toast" style="display:none; position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:9998; background:#1c2530; color:#fff; padding:9px 16px; border-radius:8px; font-size:13px; box-shadow:0 2px 10px rgba(0,0,0,.2);"></div>
+<!-- モデルDLの進捗バー -->
+<div id="dlBar" style="display:none; position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:9999; background:#1c2530; color:#fff; padding:13px 18px; border-radius:10px; min-width:340px; box-shadow:0 3px 14px rgba(0,0,0,.28);">
+  <div id="dlMsg" style="font-size:13px; margin-bottom:9px;">音声モデルをダウンロード中…（初回のみ）</div>
+  <div style="background:#ffffff22; border-radius:6px; height:10px; overflow:hidden;">
+    <div id="dlFill" style="background:#2ea3ff; height:100%; width:0%; transition:width .25s;"></div>
+  </div>
+  <div id="dlPct" style="font-size:11px; text-align:right; margin-top:5px; opacity:.85;">0%</div>
+</div>
 <header>
   <h1>🎙️ 音声入力 → 弥生CSV（小口現金・お試し版）</h1>
   <p>言ったことだけを構造化します。勘定科目の自動推測はしません。<span id="appVer" style="margin-left:10px; opacity:.7; font-size:11px;"></span></p>
@@ -357,23 +365,77 @@ $('sampleBtn').onclick = ()=>{
 $('clearInputBtn').onclick = ()=>{ $('input').value=''; voiceInterim=''; };
 $('clearBtn').onclick = ()=>{ rows=[]; render(); };
 
-// 音声入力（Web Speech API・Chrome）— 「停止」を押すまで聞き続ける
+// 音声入力：デスクトップ＝ローカルWhisper録音、ブラウザ＝Web Speech
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const micBtn = $('micBtn');
-if(SR){
+
+// ── デスクトップ：録音 → whisper-cli で文字化 ──
+let recCtx=null, recStream=null, recProc=null, recBufs=[], recording=false;
+async function whisperStart(){
+  const T = window.__TAURI__;
+  let has=false; try{ has = await T.core.invoke('model_exists'); }catch(_){}
+  if(!has){
+    const bar=document.getElementById('dlBar'), fill=document.getElementById('dlFill'), pct=document.getElementById('dlPct'), msg=document.getElementById('dlMsg');
+    msg.textContent='音声モデルをダウンロード中…（初回のみ）'; fill.style.width='0%'; pct.textContent='0%'; bar.style.display='block';
+    micBtn.disabled=true;
+    let unlisten=null;
+    try{ unlisten = await T.event.listen('model-progress', (e)=>{
+      const d=e.payload||{}; const mb=(n)=>Math.floor((n||0)/1048576);
+      if(d.total>0){ const p=Math.min(100,Math.floor(d.downloaded/d.total*100)); fill.style.width=p+'%'; pct.textContent=p+'%（'+mb(d.downloaded)+' / '+mb(d.total)+' MB）'; }
+      else { pct.textContent=mb(d.downloaded)+' MB'; }
+    }); }catch(_){}
+    try{ await T.core.invoke('download_model'); }
+    catch(e){ if(unlisten)unlisten(); bar.style.display='none'; toast('モデルのダウンロードに失敗: '+e); micBtn.disabled=false; return; }
+    if(unlisten)unlisten();
+    bar.style.display='none';
+    toast('音声モデルの準備ができました。もう一度マイクを押してください');
+    micBtn.disabled=false; return;
+  }
+  try{ recStream = await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(e){ toast('マイクを使用できません（権限をご確認ください）'); return; }
+  recCtx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+  const src = recCtx.createMediaStreamSource(recStream);
+  recProc = recCtx.createScriptProcessor(4096,1,1);
+  recBufs=[];
+  recProc.onaudioprocess = (e)=>{ recBufs.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+  src.connect(recProc); recProc.connect(recCtx.destination);
+  recording=true; micBtn.classList.add('on'); micBtn.textContent='🔴 録音中…（停止）';
+}
+async function whisperStop(){
+  recording=false; micBtn.classList.remove('on'); micBtn.textContent='🎤 音声入力（Space）';
+  try{ recProc.disconnect(); }catch(_){}
+  try{ recStream.getTracks().forEach(t=>t.stop()); }catch(_){}
+  const len = recBufs.reduce((a,b)=>a+b.length,0);
+  const samples = new Float32Array(len); let off=0;
+  for(const b of recBufs){ samples.set(b,off); off+=b.length; }
+  try{ await recCtx.close(); }catch(_){}
+  if(len < 1600){ toast('録音が短すぎます'); return; }
+  toast('認識中…', 120000);
+  const prompt = ACCOUNTS.concat(SUBS, VENDORS).join(' ');
+  try{
+    const text = await window.__TAURI__.core.invoke('transcribe', { samples: Array.from(samples), prompt });
+    const t=document.getElementById('toast'); if(t) t.style.display='none';
+    if(text){ const v=$('input').value; $('input').value = v + ((v && !v.endsWith(' '))?' ':'') + text; }
+    else toast('（聞き取れませんでした）');
+  }catch(e){ toast('認識に失敗: '+e); }
+}
+
+if(window.__TAURI__){
+  // デスクトップアプリ：ローカルWhisper
+  micBtn.onclick = ()=>{ recording ? whisperStop() : whisperStart(); };
+} else if(SR){
+  // ブラウザ：Web Speech API（停止まで聞き続ける）
   const rec = new SR();
   rec.lang = 'ja-JP';
-  rec.continuous = true;       // 句切れ（間）で止めない
-  rec.interimResults = true;   // 認識中の文字をライブ表示
-  let listening = false;       // ユーザーが録音ONにしているか
-
+  rec.continuous = true;
+  rec.interimResults = true;
+  let listening = false;
   micBtn.onclick = ()=>{
     if(listening){ listening=false; rec.stop(); }
     else { listening=true; voiceInterim=''; try{ rec.start(); }catch(_){} }
   };
   rec.onstart = ()=>{ micBtn.classList.add('on'); micBtn.textContent='🔴 認識中…（Spaceで停止）'; };
   rec.onresult = e=>{
-    // 前回のライブ表示分を消してから貼り直す
     let base = $('input').value;
     if(voiceInterim && base.endsWith(voiceInterim)) base = base.slice(0, base.length - voiceInterim.length);
     let finals='', interim='';
@@ -385,13 +447,11 @@ if(SR){
     $('input').value = base + finals + interim;
   };
   rec.onerror = e=>{
-    if(e.error==='no-speech' || e.error==='aborted') return;   // 無音・一時停止は無視
-    if(e.error==='not-allowed' || e.error==='service-not-allowed'){
-      listening=false; alert('マイクの使用が許可されていません。文字入力でもお使いいただけます。');
-    }
+    if(e.error==='no-speech' || e.error==='aborted') return;
+    if(e.error==='not-allowed' || e.error==='service-not-allowed'){ listening=false; toast('マイクの使用が許可されていません'); }
   };
   rec.onend = ()=>{
-    if(listening){ try{ rec.start(); }catch(_){} }   // 自動で復帰して聞き続ける
+    if(listening){ try{ rec.start(); }catch(_){} }
     else { voiceInterim=''; micBtn.classList.remove('on'); micBtn.textContent='🎤 音声入力（Space）'; }
   };
 } else {

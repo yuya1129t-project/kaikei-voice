@@ -2,9 +2,10 @@
 use std::fs;
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_shell::ShellExt;
 
 const LICENSE_SERVER: &str = "https://kaikei-license.yuya1129t.workers.dev";
 const GRACE_DAYS: i64 = 14;
@@ -196,6 +197,99 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(false)
 }
 
+// ───────── 音声入力（ローカルWhisper） ─────────
+
+// 音声モデルが端末にあるか
+#[tauri::command]
+fn model_exists(app: tauri::AppHandle) -> bool {
+    app_dir(&app).join("ggml-small.bin").exists()
+}
+
+// 音声モデル（small・約466MB）を初回ダウンロード（ストリーミング保存）
+#[tauri::command]
+async fn download_model(app: tauri::AppHandle) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+    let dir = app_dir(&app);
+    let path = dir.join("ggml-small.bin");
+    if path.exists() {
+        return Ok(());
+    }
+    let tmp = dir.join("ggml-small.bin.part");
+    let url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin";
+    let resp = reqwest::get(url).await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("ダウンロード失敗: {}", resp.status()));
+    }
+    let total = resp.content_length().unwrap_or(0);
+    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    let mut stream = resp.bytes_stream();
+    let mut downloaded: u64 = 0;
+    let mut last: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+        downloaded += chunk.len() as u64;
+        if downloaded - last >= 2_000_000 {
+            last = downloaded;
+            let _ = app.emit("model-progress", serde_json::json!({"downloaded": downloaded, "total": total}));
+        }
+    }
+    drop(file);
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    let _ = app.emit("model-progress", serde_json::json!({"downloaded": total, "total": total, "done": true}));
+    Ok(())
+}
+
+// 録音PCM(16kHz mono f32)を受け取り、whisper-cliで文字化して返す
+#[tauri::command]
+async fn transcribe(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Licensed>,
+    samples: Vec<f32>,
+    prompt: String,
+) -> Result<String, String> {
+    let licensed = *state.0.lock().unwrap();
+    if !licensed {
+        return Err("ライセンスが有効ではありません".into());
+    }
+    let dir = app_dir(&app);
+    let model = dir.join("ggml-small.bin");
+    if !model.exists() {
+        return Err("model_missing".into());
+    }
+    let wav = dir.join("rec.wav");
+    {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).map_err(|e| e.to_string())?;
+        for &s in &samples {
+            let v = (s.max(-1.0).min(1.0) * 32767.0) as i16;
+            w.write_sample(v).map_err(|e| e.to_string())?;
+        }
+        w.finalize().map_err(|e| e.to_string())?;
+    }
+    let model_s = model.to_string_lossy().to_string();
+    let wav_s = wav.to_string_lossy().to_string();
+    let output = app
+        .shell()
+        .sidecar("whisper-cli")
+        .map_err(|e| e.to_string())?
+        .args([
+            "-m", &model_s, "-f", &wav_s, "-l", "ja",
+            "--prompt", &prompt, "-np", "-nt", "-t", "4",
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(text)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -203,8 +297,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_shell::init())
         .manage(Licensed(Mutex::new(false)))
-        .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license, app_version, check_update, install_update])
+        .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license, app_version, check_update, install_update, model_exists, download_model, transcribe])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
