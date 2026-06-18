@@ -97,6 +97,7 @@
       <button class="green" id="yayoiBtn">弥生取込ファイル（.txt / Shift_JIS）</button>
       <button class="ghost" id="excelBtn">Excel用CSV（UTF-8）</button>
       <button class="ghost" id="clearBtn">表をクリア</button>
+      <button class="ghost" id="updBtn" style="display:none">⬆️ アップデート確認</button>
     </div>
     <p class="hint">
       弥生CSVは<b>先生の実エクスポートと同じ形式</b>（25列・和暦・Shift_JIS・インボイス税区分）で出力します。<br>
@@ -489,6 +490,28 @@ $('excelBtn').onclick = ()=>{
 };
 
 render();
+
+// ───────── 自動アップデート（デスクトップアプリ内のみ） ─────────
+async function checkForUpdate(silent){
+  const T = window.__TAURI__;
+  if(!T || !T.updater){ if(!silent) alert('この環境ではアップデート確認は使えません（ブラウザ表示時など）'); return; }
+  try {
+    const update = await T.updater.check();
+    if(update && update.available){
+      if(confirm('新しいバージョン '+update.version+' があります。今すぐ更新しますか？\n（ダウンロード後、自動で再起動します）')){
+        await update.downloadAndInstall();
+        if(T.process && T.process.relaunch) await T.process.relaunch();
+      }
+    } else if(!silent){
+      alert('お使いのバージョンが最新です。');
+    }
+  } catch(e){ if(!silent) alert('アップデート確認に失敗しました: '+e); else console.warn('update check failed', e); }
+}
+if(window.__TAURI__){
+  const ub = document.getElementById('updBtn');
+  if(ub){ ub.style.display=''; ub.onclick = ()=> checkForUpdate(false); }
+  setTimeout(()=> checkForUpdate(true), 1500);   // 起動時に静かに確認
+}
 </script>
 </body>
 </html>
