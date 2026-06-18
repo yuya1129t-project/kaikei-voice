@@ -1,0 +1,42 @@
+name: Build Windows
+
+# 手動実行（Actionsタブの Run workflow）か、v1.0.0 などのタグ push でビルド
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm deps
+        run: npm install
+
+      - name: Build (Tauri / Windows)
+        run: npm run tauri build
+
+      # 出来上がったインストーラ(.exe / .msi)をダウンロード可能な成果物として保存
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: KaikeiVoice-windows
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error

@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>音声入力 → 弥生CSV（小口・お試し版）</title>
+<!-- Shift_JIS 変換用（弥生はShift_JISを要求するため） -->
+<script src="./vendor/encoding.min.js"></script>
+<style>
+  :root { font-family: "Hiragino Sans", "Yu Gothic", system-ui, sans-serif; }
+  body { margin: 0; background: #f4f6f9; color: #1c2530; }
+  header { background: #1f6feb; color: #fff; padding: 14px 20px; }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 4px 0 0; font-size: 12px; opacity: .9; }
+  main { max-width: 1000px; margin: 0 auto; padding: 20px; }
+  .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 16px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .card h2 { margin: 0 0 10px; font-size: 14px; color: #34404d; }
+  textarea { width: 100%; box-sizing: border-box; height: 70px; font-size: 16px;
+             padding: 10px; border: 1px solid #cdd5df; border-radius: 8px; resize: vertical; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  button { font-size: 14px; padding: 9px 16px; border: 0; border-radius: 8px; cursor: pointer; }
+  .primary { background: #1f6feb; color: #fff; }
+  .mic { background: #e8484c; color: #fff; }
+  .mic.on { background: #b3262a; animation: pulse 1s infinite; }
+  .ghost { background: #eef1f5; color: #34404d; }
+  .green { background: #1f9d57; color: #fff; }
+  @keyframes pulse { 50% { opacity: .6; } }
+  .settings label { font-size: 12px; color: #5a6675; margin-right: 4px; }
+  .settings input { padding: 6px 8px; border: 1px solid #cdd5df; border-radius: 6px; width: 90px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid #e3e8ef; padding: 4px; text-align: left; }
+  th { background: #f0f3f7; font-size: 12px; color: #5a6675; }
+  td input { width: 100%; box-sizing: border-box; border: 1px solid transparent; border-radius: 4px;
+             padding: 6px 4px; font-size: 13px; background: transparent; }
+  td input:hover { border-color: #dbe2ea; background: #fafbfc; }       /* 編集できると分かるように */
+  td input:focus { background: #fff7d6; border-color: #f0c000; outline: none; }
+  tr.bad td { background: #fdeced; }
+  tr.grp td:first-child { box-shadow: inset 3px 0 0 #1f6feb; }   /* 複合仕訳のまとまり */
+  .amt input { text-align: right; }
+  .del { color: #e8484c; cursor: pointer; text-align: center; font-weight: bold; }
+  .hint { font-size: 12px; color: #7a8694; margin-top: 6px; line-height: 1.6; }
+  .pill { display: inline-block; background: #eef4ff; color: #1f6feb; border-radius: 999px;
+          padding: 2px 10px; font-size: 11px; margin-right: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎙️ 音声入力 → 弥生CSV（小口現金・お試し版）</h1>
+  <p>言ったことだけを構造化します。勘定科目の自動推測はしません。</p>
+</header>
+
+<main>
+  <div class="card">
+    <h2>① 入力（話す or 打つ）</h2>
+    <textarea id="input" placeholder="例：　6月15日　セブンイレブン　消耗品費　事務用品　1280円"></textarea>
+    <div class="row">
+      <button class="mic" id="micBtn">🎤 音声入力（Space）</button>
+      <button class="primary" id="addBtn">解析して表に追加（Enter）</button>
+      <button class="ghost" id="clearInputBtn">入力クリア（Esc）</button>
+      <button class="ghost" id="sampleBtn">サンプルを入れる</button>
+    </div>
+    <p class="hint">
+      話し方の型：<span class="pill">日付</span><span class="pill">店舗名</span><span class="pill">勘定科目</span><span class="pill">補助科目</span><span class="pill">金額</span><br>
+      複数行まとめてもOK（1行＝1件）。マイクはChrome推奨で、<b>「停止」を押すまで聞き続けます</b>（間があいても止まりません）。<b>Spaceキーでも開始／停止できます</b>。1件話す→<b>Enter</b>で解析、を繰り返せます。うまく拾わない時は文字で打って「解析」でも同じ結果に。<b>Esc</b>で入力欄をクリアして言い直せます。<br>
+      🔁 <b>連続入力</b>：「◯月◯日」ごとに自動で別の行に分かれます。何件も続けて話して、最後に<b>Enter</b>を1回押せば一気に追加できます。<br>
+      🧾 <b>10%と8%が混在</b>：「セブンイレブン 消耗品費 <b>コーヒー代 100円 10% 袋代 50円 8%</b>」のように、<b>金額の前に品目（摘要）</b>・<b>金額のあとに税率</b>を言うと、行ごとに摘要が入った複合仕訳になります（店舗名は現金行の摘要へ）。
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>② 確認・修正</h2>
+    <div class="settings row">
+      <span><label>年</label><input id="year" type="number" value="2026"></span>
+      <span><label>相手科目</label><input id="counter" value="現金"></span>
+      <span><label>既定税区分(借方)</label><input id="taxd" value="課対仕入内10%適格"></span>
+    </div>
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th style="width:26px">#</th><th style="width:84px">日付</th><th style="width:100px">店舗</th><th style="width:105px">勘定科目</th>
+          <th style="width:95px">補助科目</th><th>摘要</th><th style="width:118px">税区分</th>
+          <th style="width:80px">金額</th><th style="width:22px"></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <datalist id="dl-acc"></datalist>
+    <datalist id="dl-tax"></datalist>
+    <p class="hint">赤い行＝勘定科目が未確定。<b>各セルをクリックして直接修正</b>でき、<b>Tab</b>で次のセルへ移動できます。勘定科目・税区分は<b>クリックでプルダウン</b>から選べます。相手科目（現金）と貸方は出力時に自動補完します。<br>
+      📣 <b>音声で修正</b>：「金額 5000円」と言って「解析」を押すと<b>直前の行</b>の金額を直します（日付／店舗／勘定科目／補助科目／税区分も同様）。古い行は「<b>2行目</b> 金額 5000円」のように番号で指定。</p>
+  </div>
+
+  <div class="card">
+    <h2>③ 出力</h2>
+    <div class="row">
+      <button class="green" id="yayoiBtn">弥生取込ファイル（.txt / Shift_JIS）</button>
+      <button class="ghost" id="excelBtn">Excel用CSV（UTF-8）</button>
+      <button class="ghost" id="clearBtn">表をクリア</button>
+    </div>
+    <p class="hint">
+      弥生CSVは<b>先生の実エクスポートと同じ形式</b>（25列・和暦・Shift_JIS・インボイス税区分）で出力します。<br>
+      ⚠️ 税区分は「課対仕入内10%適格」を既定に。軽減8%や売上の税区分文字列は仮なので、実データが出たら合わせ込みます。
+    </p>
+  </div>
+</main>
+
+<script>
+// ───────── マスタ（デモ用。本番は先生の弥生マスタを丸ごと読み込む） ─────────
+const ACCOUNTS = ["消耗品費","旅費交通費","車両費","会議費","接待費","接待交際費","交際費","通信費","新聞図書費",
+  "水道光熱費","福利厚生費","事務用品費","雑費","修繕費","支払手数料","荷造運賃","広告宣伝費","租税公課"];
+const SUBS = ["事務用品","電車代","タクシー代","ガソリン代","ガソリン","打合せ","会議","切手","コピー代",
+  "インターネット代","電話代","書籍","駐車場代","高速代"];
+const VENDORS = ["セブンイレブン","ローソン","ファミリーマート","ENEOS","エネオス","出光","JR東日本","JR",
+  "スターバックス","スタバ","NTT","Amazon","ヤマト運輸","佐川急便"];
+
+// マスタ照合：未使用トークンから一致を探す（完全一致を優先→部分一致）
+function matchMaster(tokens, used, list){
+  for(let i=0;i<tokens.length;i++){ if(!used[i] && list.includes(tokens[i])) return {i, v:tokens[i]}; }
+  for(let i=0;i<tokens.length;i++){ if(used[i]) continue;
+    const hit = list.find(a=>tokens[i].includes(a)||a.includes(tokens[i]));
+    if(hit) return {i, v:hit};
+  }
+  return null;
+}
+
+// ───────── パーサ：言った文字列を項目に分解（推測はしない） ─────────
+// 全角→半角、漢数字→整数（音声は「六月十五日」「千二百八十円」のように返すことがある）
+function zen2han(s){ return String(s).replace(/[０-９]/g, c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)); }
+function kanjiToNum(str){
+  // 「65400」「6万5400」「六万五千四百」「1,280」すべて対応（数字と漢字の混在OK）
+  const s = zen2han(String(str)).replace(/[,，\s　]/g,'');
+  if(s==='') return null;
+  if(/^[0-9]+$/.test(s)) return parseInt(s,10);
+  const dig={〇:0,零:0,一:1,二:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9};
+  const uni={十:10,百:100,千:1000}, big={万:10000,億:100000000,兆:1000000000000};
+  let total=0, section=0, current=0, used=false;
+  for(let i=0;i<s.length;i++){
+    const ch=s[i];
+    if(ch>='0' && ch<='9'){                                   // アラビア数字の連続をまとめて読む
+      let j=i; while(j<s.length && s[j]>='0' && s[j]<='9') j++;
+      current=parseInt(s.slice(i,j),10); used=true; i=j-1;
+    }
+    else if(ch in dig){ current=dig[ch]; used=true; }
+    else if(ch in uni){ section+=(current||1)*uni[ch]; current=0; used=true; } // 十百千
+    else if(ch in big){ section+=current; total+=section*big[ch]; section=0; current=0; used=true; } // 万億兆
+    else return null;
+  }
+  return used ? total+section+current : null;
+}
+
+const NUM = '[0-9０-９一二三四五六七八九十百千万億〇零,，]';
+
+// 日付：6月15日 / 六月十五日 / 6/15 を行のどこからでも拾って取り除く
+function extractDate(line, year){
+  const m = line.match(new RegExp(`(${NUM}+)\\s*[月/.\\-]\\s*(${NUM}+)\\s*日?`));
+  if(!m) return { date:'', rest:line };
+  const mo=kanjiToNum(m[1]), da=kanjiToNum(m[2]);
+  if(mo==null||da==null||mo<1||mo>12||da<1||da>31) return { date:'', rest:line };
+  const date=`${year}/${String(mo).padStart(2,'0')}/${String(da).padStart(2,'0')}`;
+  return { date, rest:(line.slice(0,m.index)+' '+line.slice(m.index+m[0].length)).trim() };
+}
+// 金額：「○○円」優先、無ければ残りの数字
+function extractAmount(line){
+  const m = line.match(new RegExp(`(${NUM}+)\\s*[円圓]`));
+  if(!m){
+    const m2 = line.match(/[0-9０-９,，]+/g);
+    if(m2){ const last=m2[m2.length-1];
+      return { amount:parseInt(zen2han(last).replace(/[,，]/g,''),10), rest: line.replace(last,' ').trim() }; }
+    return { amount:'', rest:line };
+  }
+  const v = kanjiToNum(m[1].replace(/[,，]/g,''));
+  return { amount: v==null?'':v, rest:(line.slice(0,m.index)+' '+line.slice(m.index+m[0].length)).trim() };
+}
+
+// 税率キーワード（10%/8%/標準/軽減）→ '10' or '8'
+function rateKeyword(tok){
+  const t = zen2han(String(tok)).replace(/％/g,'%').replace(/パーセント/g,'%');
+  if(/^8%$/.test(t) || t==='軽減') return '8';
+  if(/^10%$/.test(t) || t==='標準') return '10';
+  return null;
+}
+// 単一トークンが金額か判定（円付き・漢数字・数字混在に対応）
+function parseAmountTok(tok){
+  const t = zen2han(String(tok)).replace(/[,，]/g,'').replace(/[円圓]$/,'');
+  if(t==='') return null;
+  if(/^[0-9一二三四五六七八九十百千万億〇零]+$/.test(t)) return kanjiToNum(t);
+  return null;
+}
+// 税率→税区分文字列（既定の "10%" を "8%" に差し替え）
+function taxStringFor(rate, baseTax){ return rate==='8' ? baseTax.replace('10%','8%') : baseTax; }
+
+// 1発話を解析 → 行の配列（複数税率なら複合仕訳としてグループ化）
+function parseLine(line, year){
+  let { date, rest } = extractDate(line.trim(), year);
+  rest = rest.replace(/(\d+)\s*[%％]/g,'$1%').replace(/(\d+)\s*パーセント/g,'$1%');  // 「10 %」等を正規化
+  const tokens = rest.split(/[\s　]+/).filter(Boolean);
+  const used = tokens.map(()=>false);
+  const baseTax = $('taxd').value;
+  const defRate = /8%/.test(baseTax) ? '8' : '10';
+  // 先にマスタ照合（勘定科目・補助科目・店舗）
+  const am = matchMaster(tokens, used, ACCOUNTS); let account=''; if(am){ account=am.v; used[am.i]=true; }
+  const sm = matchMaster(tokens, used, SUBS);     let sub='';     if(sm){ sub=sm.v;     used[sm.i]=true; }
+  const vm = matchMaster(tokens, used, VENDORS);  let vendor='';  if(vm){ vendor=tokens[vm.i]; used[vm.i]=true; }
+  // 残りトークンを順に走査：自由テキスト＝その明細の摘要、数字＝金額、税率＝直近に適用
+  const items=[]; let desc=[], pRate=null;
+  for(let i=0;i<tokens.length;i++){
+    if(used[i]) continue;
+    const rk = rateKeyword(tokens[i]);
+    if(rk){ if(items.length && !items[items.length-1].explicit){ items[items.length-1].rate=rk; items[items.length-1].explicit=true; } else pRate=rk; continue; }
+    const a = parseAmountTok(tokens[i]);
+    if(a!=null){ items.push({memo:desc.join(' '), amount:a, rate:pRate||defRate, explicit:!!pRate}); desc=[]; pRate=null; continue; }
+    desc.push(tokens[i]);  // 金額の前の自由テキスト＝摘要（品目）
+  }
+  // 末尾に残った自由テキスト：店舗が空なら店舗へ、あれば最後の明細の摘要へ
+  if(desc.length){ if(!vendor) vendor=desc.join(' '); else if(items.length) items[items.length-1].memo=(items[items.length-1].memo+' '+desc.join(' ')).trim(); }
+  const base = { date:date||'', vendor, account, sub, raw:line.trim() };
+  if(items.length===0) return [{ ...base, memo:'', tax:'', amount:'', group:null }];
+  if(items.length===1) return [{ ...base, memo:items[0].memo, tax: taxStringFor(items[0].rate, baseTax), amount: items[0].amount, group:null }];
+  const gid = ++groupSeq;   // 複合：明細ごとに行、同じグループIDで束ねる
+  return items.map(it=>({ ...base, memo:it.memo, tax: taxStringFor(it.rate, baseTax), amount: it.amount, group: gid }));
+}
+
+// 連続音声を「日付ごと」に分割（各仕訳は日付で始まる前提）。先頭の日付なしテキストは修正コマンド等として残す
+function splitEntries(text){
+  const flat = String(text).replace(/[\n\r]+/g,' ').replace(/[。、]/g,' ').trim();  // 音声の句読点を除去
+  if(!flat) return [];
+  const re = new RegExp(`(${NUM}+)\\s*[月/.\\-]\\s*(${NUM}+)\\s*日?`, 'g');
+  const idxs = []; let m;
+  while((m = re.exec(flat)) !== null){
+    const mo=kanjiToNum(m[1]), da=kanjiToNum(m[2]);
+    if(mo!=null && da!=null && mo>=1 && mo<=12 && da>=1 && da<=31) idxs.push(m.index);
+  }
+  if(idxs.length===0) return [flat];
+  const parts = [];
+  if(idxs[0] > 0){ const head = flat.slice(0, idxs[0]).trim(); if(head) parts.push(head); }
+  for(let i=0;i<idxs.length;i++){
+    const chunk = flat.slice(idxs[i], i+1<idxs.length ? idxs[i+1] : flat.length).trim();
+    if(chunk) parts.push(chunk);
+  }
+  return parts;
+}
+
+// 修正コマンド：「金額 5000円」「2行目 日付 3月31日」など。直近の行（または指定行）を上書き
+function parseCorrection(line, year){
+  let body = line.trim();
+  // 行指定（任意）：「2番目」「2行目」「2件目」
+  let row = null;
+  const rm = body.match(/([0-9０-９一二三四五六七八九十]+)\s*(番目|行目|件目)/);
+  if(rm){ row = kanjiToNum(rm[1]); body = body.replace(rm[0],' ').trim(); }
+  body = body.replace(/^(訂正|修正|変更|なおして|直して)\s*/,'').trim();
+  const FIELDS = [
+    {keys:['日付'],                 k:'date'},
+    {keys:['金額','きんがく'],       k:'amount'},
+    {keys:['店舗','取引先'],         k:'vendor'},
+    {keys:['摘要','品目'],           k:'memo'},
+    {keys:['勘定科目','科目'],       k:'account'},
+    {keys:['補助科目','補助'],       k:'sub'},
+    {keys:['税区分'],               k:'tax'},
+  ];
+  for(const f of FIELDS){
+    for(const key of f.keys){
+      const m = body.match(new RegExp('^'+key+'\\s*(を|は)?\\s*(.+?)\\s*(に|へ)?$'));
+      if(m){
+        let val = m[2].trim();
+        if(f.k==='date'){   const d=extractDate(val,year);  if(d.date) val=d.date; }
+        if(f.k==='amount'){ const a=extractAmount(val);     if(a.amount!=='') val=a.amount; }
+        return { field:f.k, value:val, row };
+      }
+    }
+  }
+  return null;
+}
+
+// ───────── 表の状態管理 ─────────
+let rows = [];
+let voiceInterim = '';   // 音声認識中のライブ表示分
+let groupSeq = 0;        // 複合仕訳のグループID採番
+const $ = id => document.getElementById(id);
+function render(){
+  const tb = $('tbody'); tb.innerHTML='';
+  rows.forEach((r,i)=>{
+    const bad = !r.account || !r.date || r.amount==='';
+    const tr = document.createElement('tr');
+    tr.className = [bad?'bad':'', r.group?'grp':''].filter(Boolean).join(' ');
+    tr.innerHTML = `
+      <td style="text-align:center;color:#9aa6b3">${i+1}</td>
+      <td><input value="${r.date}"   data-i="${i}" data-k="date"></td>
+      <td><input value="${r.vendor}" data-i="${i}" data-k="vendor"></td>
+      <td><input value="${r.account}" list="dl-acc" data-i="${i}" data-k="account"></td>
+      <td><input value="${r.sub}"     data-i="${i}" data-k="sub"></td>
+      <td><input value="${r.memo||''}" data-i="${i}" data-k="memo"></td>
+      <td><input value="${r.tax||$('taxd').value}" list="dl-tax" data-i="${i}" data-k="tax"></td>
+      <td class="amt"><input value="${r.amount}" data-i="${i}" data-k="amount"></td>
+      <td class="del" data-del="${i}">×</td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('input').forEach(inp=>{
+    inp.oninput = e=>{
+      const i=e.target.dataset.i, k=e.target.dataset.k;
+      rows[i][k]=e.target.value;
+      // その行の赤/白だけ更新（全体は再描画しない＝フォーカスが外れずTab移動できる）
+      const r=rows[i], bad = !r.account || !r.date || r.amount==='';
+      e.target.closest('tr').className = [bad?'bad':'', r.group?'grp':''].filter(Boolean).join(' ');
+    };
+  });
+  tb.querySelectorAll('.del').forEach(d=>{
+    d.onclick = e=>{ rows.splice(+e.target.dataset.del,1); render(); };
+  });
+}
+
+// ───────── ボタン群 ─────────
+$('addBtn').onclick = ()=>{
+  const year = $('year').value;
+  const lines = splitEntries($('input').value);   // 日付ごとに自動分割（連続入力対応）
+  for(const l of lines){
+    const corr = parseCorrection(l, year);
+    if(corr){
+      if(rows.length){
+        const idx = corr.row ? corr.row-1 : rows.length-1;
+        if(idx>=0 && idx<rows.length) rows[idx][corr.field] = corr.value;
+      }
+      continue;                       // 修正コマンドは新規行を作らない
+    }
+    rows.push(...parseLine(l, year));
+  }
+  $('input').value=''; voiceInterim=''; render();
+};
+$('sampleBtn').onclick = ()=>{
+  $('input').value =
+`6月15日 セブンイレブン 消耗品費 事務用品 1280円
+6月16日 JR東日本 旅費交通費 電車代 460円
+6月16日 スターバックス 会議費 打合せ 1100円`;
+};
+$('clearInputBtn').onclick = ()=>{ $('input').value=''; voiceInterim=''; };
+$('clearBtn').onclick = ()=>{ rows=[]; render(); };
+
+// 音声入力（Web Speech API・Chrome）— 「停止」を押すまで聞き続ける
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const micBtn = $('micBtn');
+if(SR){
+  const rec = new SR();
+  rec.lang = 'ja-JP';
+  rec.continuous = true;       // 句切れ（間）で止めない
+  rec.interimResults = true;   // 認識中の文字をライブ表示
+  let listening = false;       // ユーザーが録音ONにしているか
+
+  micBtn.onclick = ()=>{
+    if(listening){ listening=false; rec.stop(); }
+    else { listening=true; voiceInterim=''; try{ rec.start(); }catch(_){} }
+  };
+  rec.onstart = ()=>{ micBtn.classList.add('on'); micBtn.textContent='🔴 認識中…（Spaceで停止）'; };
+  rec.onresult = e=>{
+    // 前回のライブ表示分を消してから貼り直す
+    let base = $('input').value;
+    if(voiceInterim && base.endsWith(voiceInterim)) base = base.slice(0, base.length - voiceInterim.length);
+    let finals='', interim='';
+    for(let i=e.resultIndex; i<e.results.length; i++){
+      const tr = e.results[i][0].transcript;
+      if(e.results[i].isFinal) finals += tr + ' '; else interim += tr;
+    }
+    voiceInterim = interim;
+    $('input').value = base + finals + interim;
+  };
+  rec.onerror = e=>{
+    if(e.error==='no-speech' || e.error==='aborted') return;   // 無音・一時停止は無視
+    if(e.error==='not-allowed' || e.error==='service-not-allowed'){
+      listening=false; alert('マイクの使用が許可されていません。文字入力でもお使いいただけます。');
+    }
+  };
+  rec.onend = ()=>{
+    if(listening){ try{ rec.start(); }catch(_){} }   // 自動で復帰して聞き続ける
+    else { voiceInterim=''; micBtn.classList.remove('on'); micBtn.textContent='🎤 音声入力（Space）'; }
+  };
+} else {
+  micBtn.disabled = true; micBtn.textContent='🎤 (このブラウザは非対応)';
+}
+
+// キーボードショートカット：Space=録音ON/OFF、Enter=解析して追加（フィールド編集中は通常入力）
+document.addEventListener('keydown', e=>{
+  const ae = document.activeElement;
+  const typing = ae && (ae.tagName==='INPUT' || ae.tagName==='TEXTAREA');
+  if(e.code==='Space' && !typing){ e.preventDefault(); micBtn.click(); return; }
+  if(e.key==='Escape'){ e.preventDefault(); $('clearInputBtn').click(); return; }   // Escで入力欄クリア
+  if(e.key==='Enter'){
+    if(!typing){ e.preventDefault(); $('addBtn').click(); }                                   // 通常時：Enterで解析
+    else if((e.metaKey||e.ctrlKey) && ae.id==='input'){ e.preventDefault(); $('addBtn').click(); } // 入力欄編集中：⌘/Ctrl+Enterで解析
+  }
+});
+// マウスでボタンを押した後はフォーカスを外し、Space/Enterショートカットを安定させる
+['micBtn','addBtn','sampleBtn','clearInputBtn','yayoiBtn','excelBtn','clearBtn'].forEach(id=>{
+  const b=$(id); if(b) b.addEventListener('click', ()=> b.blur());
+});
+
+// 勘定科目・税区分の候補（修正時にプルダウンから選べる）
+function fillDatalist(id, items){ $(id).innerHTML = items.map(v=>`<option value="${v}">`).join(''); }
+fillDatalist('dl-acc', ACCOUNTS);
+fillDatalist('dl-tax', ['課対仕入内10%適格','課対仕入内8%適格','対象外','課税売上内10%適格','課税売上内8%適格','非課仕入','非課売上']);
+
+// ───────── CSV出力 ─────────
+function q(s){ return '"'+String(s).replace(/"/g,'""')+'"'; }
+function download(bytes, name, type){
+  const blob = new Blob([bytes], {type});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=name; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// 西暦→和暦（弥生は "R.08/06/17" 形式）
+function wareki(d){
+  const m = String(d).match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if(!m) return d;
+  const y=+m[1], mo=String(+m[2]).padStart(2,'0'), da=String(+m[3]).padStart(2,'0');
+  let era, yy;
+  if(y>2019 || (y===2019 && +m[2]>=5)){ era='R'; yy=y-2018; }   // 令和
+  else if(y>=1989){ era='H'; yy=y-1988; }                       // 平成
+  else { era='S'; yy=y-1925; }                                  // 昭和
+  return `${era}.${String(yy).padStart(2,'0')}/${mo}/${da}`;
+}
+// 内税の消費税額（端数は切り捨て。会社の端数設定に合わせて要調整）
+function taxAmount(amount, cat){
+  const amt=parseInt(amount,10); if(isNaN(amt)) return 0;
+  if(/8%/.test(cat)) return Math.floor(amt*8/108);
+  if(/10%/.test(cat)) return Math.floor(amt*10/110);
+  return 0;   // 対象外・非課税など
+}
+
+// 25列を組み立て（借方・貸方を指定。数字列はベタ、文字列はクォート）
+function yayoiRow(flag, denpyo, dateW, dAcc, dSub, dTax, dAmt, dTaxAmt, cAcc, cTax, cAmt, type, tekiyo){
+  return [ q(flag), denpyo, q(""), q(dateW), q(dAcc), q(dSub), q(""), q(dTax), dAmt, dTaxAmt,
+    q(cAcc), q(""), q(""), q(cTax), cAmt, 0, q(tekiyo||""), q(""), q(""), type, q(""), q(""), q("0"), q("0"), q("no") ].join(',');
+}
+
+// 弥生インポート形式（25列・ヘッダ無し・Shift_JIS・CRLF）— 実エクスポートに一致
+$('yayoiBtn').onclick = ()=>{
+  if(!rows.length) return alert('表が空です');
+  const counter = $('counter').value, taxd = $('taxd').value;
+  // グループ単位にまとめる（group=null は単独仕訳）
+  const groups = []; const byId = {};
+  rows.forEach(r=>{
+    if(r.group==null){ groups.push([r]); }
+    else { if(!byId[r.group]){ byId[r.group]=[]; groups.push(byId[r.group]); } byId[r.group].push(r); }
+  });
+  const lines = []; let denpyo = 0;
+  for(const g of groups){
+    denpyo++;
+    if(g.length===1){
+      // 単一仕訳（2000）：借方＝費用／貸方＝現金 を同一行に。摘要＝品目＋店舗
+      const r=g[0], tax=r.tax||taxd, amt=parseInt(r.amount,10)||0;
+      const tekiyo=[r.memo, r.vendor].filter(Boolean).join(' ');
+      lines.push(yayoiRow("2000", denpyo, wareki(r.date), r.account, r.sub, tax, amt, taxAmount(amt,tax), counter, "対象外", amt, 0, tekiyo));
+    } else {
+      // 複合仕訳（2110→2100→2101）：各借方行の摘要＝品目、現金行の摘要＝店舗
+      const total = g.reduce((s,r)=> s + (parseInt(r.amount,10)||0), 0);
+      g.forEach((r,idx)=>{
+        const tax=r.tax||taxd, amt=parseInt(r.amount,10)||0;
+        lines.push(yayoiRow(idx===0?"2110":"2100", denpyo, wareki(r.date), r.account, r.sub, tax, amt, taxAmount(amt,tax), "", "対象外", 0, 3, r.memo||""));
+      });
+      lines.push(yayoiRow("2101", denpyo, wareki(g[0].date), "", "", "対象外", 0, 0, counter, "対象外", total, 3, g[0].vendor||""));
+    }
+  }
+  const text = lines.join('\r\n')+'\r\n';
+  if(window.Encoding){
+    const sjis = Encoding.convert(text, {to:'SJIS', from:'UNICODE', type:'array'});
+    download(new Uint8Array(sjis), 'yayoi_import.txt', 'text/plain');
+  } else {
+    alert('Shift_JIS変換ライブラリが読めませんでした（オフライン？）。UTF-8で出力します。');
+    download('﻿'+text, 'yayoi_import_utf8.txt', 'text/plain');
+  }
+};
+
+// Excel用（ヘッダ有り・UTF-8 BOM）
+$('excelBtn').onclick = ()=>{
+  if(!rows.length) return alert('表が空です');
+  const head = ["日付","店舗","勘定科目","補助科目","摘要","税区分","金額"].map(q).join(',');
+  const body = rows.map(r=>[r.date,r.vendor,r.account,r.sub,r.memo||'',r.tax||$('taxd').value,r.amount].map(q).join(','));
+  download('﻿'+[head,...body].join('\r\n'), 'excel_local.csv', 'text/csv');
+};
+
+render();
+</script>
+</body>
+</html>
