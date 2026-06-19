@@ -28,18 +28,30 @@ jobs:
       - name: Install npm deps
         run: npm install
 
+      # Windows用 ReazonSpeech 常駐サーバー（sherpa-onnx, MT静的＝自己完結）をサイドカーとして取得
+      - name: Fetch Windows ReazonSpeech server (sidecar)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/sherpa-onnx-v1.13.3-win-x64-static-MT-Release.tar.bz2"
+          Invoke-WebRequest -Uri $url -OutFile sherpa.tar.bz2
+          tar -xjf sherpa.tar.bz2
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item "sherpa-onnx-v1.13.3-win-x64-static-MT-Release/bin/sherpa-onnx-offline-websocket-server.exe" "src-tauri/binaries/sherpa-onnx-offline-websocket-server-x86_64-pc-windows-msvc.exe" -Force
+          Get-Item "src-tauri/binaries/sherpa-onnx-offline-websocket-server-x86_64-pc-windows-msvc.exe" | Select-Object Name,Length
+
       - name: Build (Tauri / Windows)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
-      # 出来上がったインストーラ(.exe / .msi)をダウンロード可能な成果物として保存
+      # 出来上がったインストーラ(.exe / .msi)＋自動更新用の署名(.sig)を成果物として保存
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: KaikeiVoice-windows
           path: |
             src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sig
             src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: error

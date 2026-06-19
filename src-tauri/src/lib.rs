@@ -290,6 +290,217 @@ async fn transcribe(
     Ok(text)
 }
 
+// ───────── ストリーミング音声（whisper-server 常駐） ─────────
+const WHISPER_PORT: u16 = 8765;
+
+struct WhisperSrv(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
+
+#[tauri::command]
+async fn start_whisper(app: tauri::AppHandle, srv: tauri::State<'_, WhisperSrv>) -> Result<(), String> {
+    if srv.0.lock().unwrap().is_some() { return Ok(()); }
+    let model = app_dir(&app).join("ggml-small.bin");
+    if !model.exists() { return Err("model_missing".into()); }
+    let model_s = model.to_string_lossy().to_string();
+    let (mut rx, child) = app
+        .shell()
+        .sidecar("whisper-server")
+        .map_err(|e| e.to_string())?
+        .args(["-m", &model_s, "--host", "127.0.0.1", "--port", &WHISPER_PORT.to_string(), "-t", "8", "-bs", "1", "-bo", "1", "-l", "ja"])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn(async move { while rx.recv().await.is_some() {} });
+    *srv.0.lock().unwrap() = Some(child);
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_whisper(srv: tauri::State<'_, WhisperSrv>) -> Result<(), String> {
+    let child = srv.0.lock().unwrap().take();
+    if let Some(c) = child { let _ = c.kill(); }
+    Ok(())
+}
+
+#[tauri::command]
+async fn transcribe_chunk(
+    state: tauri::State<'_, Licensed>,
+    samples: Vec<f32>,
+    prompt: String,
+) -> Result<String, String> {
+    if !*state.0.lock().unwrap() { return Err("ライセンスが有効ではありません".into()); }
+    let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+    {
+        let spec = hound::WavSpec { channels: 1, sample_rate: 16000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let mut w = hound::WavWriter::new(&mut buf, spec).map_err(|e| e.to_string())?;
+        for &s in &samples { w.write_sample((s.max(-1.0).min(1.0) * 32767.0) as i16).map_err(|e| e.to_string())?; }
+        w.finalize().map_err(|e| e.to_string())?;
+    }
+    let wav = buf.into_inner();
+    let part = reqwest::multipart::Part::bytes(wav).file_name("a.wav").mime_str("audio/wav").map_err(|e| e.to_string())?;
+    let form = reqwest::multipart::Form::new()
+        .text("language", "ja")
+        .text("response_format", "text")
+        .text("prompt", prompt)
+        .part("file", part);
+    let resp = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{}/inference", WHISPER_PORT))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(resp.text().await.map_err(|e| e.to_string())?.trim().to_string())
+}
+
+// ───────── 高精度オフライン認識（ReazonSpeech / sherpa-onnx-offline サイドカー） ─────────
+fn reazon_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    app_dir(app).join("reazonspeech-ja")
+}
+
+#[tauri::command]
+fn reazon_model_exists(app: tauri::AppHandle) -> bool {
+    let d = reazon_dir(&app);
+    d.join("tokens.txt").exists() && d.join("encoder.onnx").exists() && d.join("joiner.onnx").exists()
+}
+
+// ReazonSpeechモデル(.tar.bz2 / int8 約150MB)を初回DL＆解凍（必要4ファイルだけ取り出す）
+#[tauri::command]
+async fn download_reazon_model(app: tauri::AppHandle) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+    let dir = reazon_dir(&app);
+    if reazon_model_exists(app.clone()) { return Ok(()); }
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01.tar.bz2";
+    let tar_path = app_dir(&app).join("reazon.tar.bz2");
+    let resp = reqwest::get(url).await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() { return Err(format!("DL失敗: {}", resp.status())); }
+    let total = resp.content_length().unwrap_or(0);
+    {
+        let mut file = std::fs::File::create(&tar_path).map_err(|e| e.to_string())?;
+        let mut stream = resp.bytes_stream();
+        let mut downloaded: u64 = 0; let mut last: u64 = 0;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| e.to_string())?;
+            file.write_all(&chunk).map_err(|e| e.to_string())?;
+            downloaded += chunk.len() as u64;
+            if downloaded - last >= 2_000_000 {
+                last = downloaded;
+                let _ = app.emit("model-progress", serde_json::json!({"downloaded": downloaded, "total": total}));
+            }
+        }
+    }
+    // 解凍：tar.bz2 → 必要ファイルだけ抽出してリネーム
+    let f = std::fs::File::open(&tar_path).map_err(|e| e.to_string())?;
+    let bz = bzip2::read::BzDecoder::new(f);
+    let mut ar = tar::Archive::new(bz);
+    for entry in ar.entries().map_err(|e| e.to_string())? {
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        let p = entry.path().map_err(|e| e.to_string())?.into_owned();
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let dest = if name.contains("encoder") && name.ends_with(".int8.onnx") { Some(dir.join("encoder.onnx")) }
+            else if name.contains("joiner") && name.ends_with(".int8.onnx") { Some(dir.join("joiner.onnx")) }
+            else if name.contains("decoder") && name.ends_with(".onnx") && !name.ends_with(".int8.onnx") { Some(dir.join("decoder.onnx")) }
+            else if name == "tokens.txt" { Some(dir.join("tokens.txt")) }
+            else { None };
+        if let Some(dest) = dest {
+            let mut out = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+            std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+        }
+    }
+    let _ = std::fs::remove_file(&tar_path);
+    if !reazon_model_exists(app.clone()) { return Err("モデル展開に失敗（必要ファイルが見つかりません）".into()); }
+    let _ = app.emit("model-progress", serde_json::json!({"downloaded": total, "total": total, "done": true}));
+    Ok(())
+}
+
+// 常駐WSサーバー方式（sherpa-onnx-offline-websocket-server をサイドカー起動＝モデル1回ロード）
+const REAZON_PORT: u16 = 8766;
+struct ReazonSrv(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
+
+// サーバー起動（未起動時のみ）。モデルをここで1回だけロード
+fn reazon_start_inner(app: &tauri::AppHandle, srv: &ReazonSrv) -> Result<(), String> {
+    let mut g = srv.0.lock().unwrap();
+    if g.is_some() { return Ok(()); }
+    let dir = reazon_dir(app);
+    let (enc, dec, joi, tok) = (dir.join("encoder.onnx"), dir.join("decoder.onnx"), dir.join("joiner.onnx"), dir.join("tokens.txt"));
+    if !tok.exists() || !enc.exists() { return Err("reazon_model_missing".into()); }
+    let (mut rx, child) = app
+        .shell()
+        .sidecar("sherpa-onnx-offline-websocket-server")
+        .map_err(|e| e.to_string())?
+        .args([
+            format!("--port={}", REAZON_PORT),
+            format!("--encoder={}", enc.to_string_lossy()),
+            format!("--decoder={}", dec.to_string_lossy()),
+            format!("--joiner={}", joi.to_string_lossy()),
+            format!("--tokens={}", tok.to_string_lossy()),
+            "--num-threads=2".to_string(),
+        ])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn(async move { while rx.recv().await.is_some() {} });
+    *g = Some(child);
+    Ok(())
+}
+
+#[tauri::command]
+fn reazon_load(app: tauri::AppHandle, srv: tauri::State<'_, ReazonSrv>) -> Result<(), String> {
+    reazon_start_inner(&app, srv.inner())
+}
+
+#[tauri::command]
+fn reazon_stop(srv: tauri::State<'_, ReazonSrv>) -> Result<(), String> {
+    if let Some(c) = srv.0.lock().unwrap().take() { let _ = c.kill(); }
+    Ok(())
+}
+
+// サーバー返却JSONから "text" を取り出す
+fn reazon_extract_text(s: &str) -> String {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s.trim()) {
+        if let Some(t) = v.get("text").and_then(|t| t.as_str()) { return t.replace(' ', ""); }
+    }
+    String::new()
+}
+
+// 録音PCM(16kHz mono f32)を 常駐サーバーへWSで送って文字化（高速）
+#[tauri::command]
+async fn transcribe_reazon(app: tauri::AppHandle, state: tauri::State<'_, Licensed>, srv: tauri::State<'_, ReazonSrv>, samples: Vec<f32>) -> Result<String, String> {
+    if !*state.0.lock().unwrap() { return Err("ライセンスが有効ではありません".into()); }
+    reazon_start_inner(&app, srv.inner())?;                 // 未起動なら起動（モデル1回ロード）
+    if samples.is_empty() { return Ok(String::new()); }
+    // ペイロード: [i32 sample_rate][i32 byte長][f32 samples...]（リトルエンディアン）
+    let byte_len = (samples.len() * 4) as i32;
+    let mut payload = Vec::with_capacity(8 + samples.len() * 4);
+    payload.extend_from_slice(&16000i32.to_le_bytes());
+    payload.extend_from_slice(&byte_len.to_le_bytes());
+    for &s in &samples { payload.extend_from_slice(&s.to_le_bytes()); }
+
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let url = format!("ws://127.0.0.1:{}", REAZON_PORT);
+    // サーバー起動直後はモデルロード中で接続不可なのでリトライ（最大~8秒）
+    let mut ws = None;
+    let mut last = String::new();
+    for _ in 0..40 {
+        match tokio_tungstenite::connect_async(url.as_str()).await {
+            Ok((w, _)) => { ws = Some(w); break; }
+            Err(e) => { last = e.to_string(); tokio::time::sleep(std::time::Duration::from_millis(200)).await; }
+        }
+    }
+    let mut ws = ws.ok_or_else(|| format!("音声サーバーに接続できません: {}", last))?;
+    ws.send(Message::Binary(payload)).await.map_err(|e| e.to_string())?;
+    let mut result = String::new();
+    while let Some(m) = ws.next().await {
+        match m {
+            Ok(Message::Text(t)) => { result = reazon_extract_text(&t); break; }
+            Ok(Message::Close(_)) => break,
+            Ok(_) => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    let _ = ws.close(None).await;
+    Ok(result)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -299,7 +510,9 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .manage(Licensed(Mutex::new(false)))
-        .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license, app_version, check_update, install_update, model_exists, download_model, transcribe])
+        .manage(WhisperSrv(Mutex::new(None)))
+        .manage(ReazonSrv(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license, app_version, check_update, install_update, model_exists, download_model, transcribe, start_whisper, stop_whisper, transcribe_chunk, reazon_model_exists, download_reazon_model, reazon_load, reazon_stop, transcribe_reazon])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -12,7 +12,7 @@
     {
       "identifier": "shell:allow-execute",
       "allow": [
-        { "name": "binaries/whisper-cli", "sidecar": true, "args": true }
+        { "name": "binaries/sherpa-onnx-offline-websocket-server", "sidecar": true, "args": true }
       ]
     }
   ]
