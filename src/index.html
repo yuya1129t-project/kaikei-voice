@@ -530,7 +530,7 @@ async function whisperStart(){
     micBtn.disabled=false; return;
   }
   try{ await T.core.invoke('reazon_load'); }catch(e){ toast('音声エンジンの起動に失敗: '+e); return; }
-  try{ recStream = await navigator.mediaDevices.getUserMedia({audio:true}); }
+  try{ recStream = await navigator.mediaDevices.getUserMedia({audio:true}); try{localStorage.setItem('micGranted','1');}catch(_){} }
   catch(e){ toast('マイクを使用できません（権限をご確認ください）'); return; }
   recCtx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
   try{ if(recCtx.state!=='running') await recCtx.resume(); }catch(_){}   // サスペンド状態だと音声が取れない→確実に再開（Macの「時々認識しない」対策）
@@ -554,9 +554,20 @@ async function whisperStop(){
   try{ await recCtx.close(); }catch(_){}
 }
 
+// macOSの「初回起動はマイク許可後に再起動が必要」対策：起動直後に一度だけ許可を確定させ、録音操作と切り離す
+async function warmMic(){
+  try{ if(localStorage.getItem('micGranted')==='1') return; }catch(_){}
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({audio:true});
+    s.getTracks().forEach(t=>t.stop());                       // 許可を取るだけ。すぐ解放（録音時に取り直す）
+    try{ localStorage.setItem('micGranted','1'); }catch(_){}
+  }catch(_){ /* 拒否/未対応はそのまま。録音時に再度要求する */ }
+}
+
 if(window.__TAURI__){
   // デスクトップアプリ：ローカルWhisper
   micBtn.onclick = ()=>{ recording ? whisperStop() : whisperStart(); };
+  warmMic();                                                  // 起動直後にマイク許可を先取り（初回の「再起動が必要」を回避）
 } else if(SR){
   // ブラウザ：Web Speech API（停止まで聞き続ける）
   const rec = new SR();
