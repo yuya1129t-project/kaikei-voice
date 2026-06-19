@@ -730,6 +730,7 @@ function showUpdateBanner(ver){
   now.onclick = async ()=>{
     now.disabled = true; later.disabled = true;
     msg.textContent = '更新中… 完了後に自動で再起動します';
+    try { await window.__TAURI__.core.invoke('reazon_stop'); }catch(_){}   // 更新前に常駐サーバーを終了（ファイルロック回避）
     try { await window.__TAURI__.core.invoke('install_update'); }
     catch(e){ msg.textContent = '更新に失敗しました: ' + e; now.disabled=false; later.disabled=false; }
   };
