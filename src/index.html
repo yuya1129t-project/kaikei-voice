@@ -354,12 +354,16 @@ function clearCell(i,k){
 function commitSeg(tR,tC,s,e){
   if(e-s < SR16*0.2) return;
   const seg=_sliceRange(s,e);
-  let sum=0; for(let n=0;n<seg.length;n++) sum+=seg[n]*seg[n];
-  if(Math.sqrt(sum/(seg.length||1)) < 0.006) return;       // ほぼ無音＝そのセルは飛ばす
+  let sum=0, peak=0; for(let n=0;n<seg.length;n++){ const a=seg[n]<0?-seg[n]:seg[n]; sum+=seg[n]*seg[n]; if(a>peak) peak=a; }
+  const rms=Math.sqrt(sum/(seg.length||1));
+  if(peak < 0.03 || rms < 0.004) return;                    // ピーク＋RMSの二段でノイズ床/無音をスキップ
   const k=EDCOLS[tC];
   window.__TAURI__.core.invoke('transcribe_reazon',{ samples:Array.from(seg) })
     .then(txt=>{ txt=_clean(txt); if(!txt) return;
-      if(DELCMD.test(txt)){ clearCell(tR,k); } else if(GRPCMD.test(txt)){ toggleGroup(tR); } else fillCell(tR,k,txt); }).catch(()=>{});
+      if(DELCMD.test(txt)){ clearCell(tR,k); return; }
+      if(GRPCMD.test(txt)){ toggleGroup(tR); return; }
+      if([...txt].length <= 1 && !/[0-9０-９]/.test(txt)) return;   // 1文字（数字以外）＝ノイズの幻聴とみなし破棄
+      fillCell(tR,k,txt); }).catch(()=>{});
 }
 // 移動：録音中は今のセルを確定して次セグメント開始、非録音時はフォーカス移動
 function goCell(r,c){
@@ -529,6 +533,7 @@ async function whisperStart(){
   try{ recStream = await navigator.mediaDevices.getUserMedia({audio:true}); }
   catch(e){ toast('マイクを使用できません（権限をご確認ください）'); return; }
   recCtx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+  try{ if(recCtx.state!=='running') await recCtx.resume(); }catch(_){}   // サスペンド状態だと音声が取れない→確実に再開（Macの「時々認識しない」対策）
   const src = recCtx.createMediaStreamSource(recStream);
   recProc = recCtx.createScriptProcessor(4096,1,1);
   recBufs=[]; segStart=0;
