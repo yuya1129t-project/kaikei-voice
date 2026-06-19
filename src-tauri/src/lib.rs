@@ -414,15 +414,27 @@ async fn download_reazon_model(app: tauri::AppHandle) -> Result<(), String> {
 
 // 常駐WSサーバー方式（sherpa-onnx-offline-websocket-server をサイドカー起動＝モデル1回ロード）
 const REAZON_PORT: u16 = 8766;
-struct ReazonSrv(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
+struct ReazonSrv {
+    child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
+    log: std::sync::Arc<Mutex<Vec<String>>>,   // サイドカーの出力(stdout/stderr)を保持→失敗時の原因表示用
+}
+
+fn reazon_push_log(buf: &std::sync::Arc<Mutex<Vec<String>>>, s: String) {
+    if s.is_empty() { return; }
+    let mut l = buf.lock().unwrap();
+    l.push(s);
+    let n = l.len();
+    if n > 120 { l.drain(0..n - 120); }      // 直近120行だけ保持
+}
 
 // サーバー起動（未起動時のみ）。モデルをここで1回だけロード
 fn reazon_start_inner(app: &tauri::AppHandle, srv: &ReazonSrv) -> Result<(), String> {
-    let mut g = srv.0.lock().unwrap();
+    let mut g = srv.child.lock().unwrap();
     if g.is_some() { return Ok(()); }
     let dir = reazon_dir(app);
     let (enc, dec, joi, tok) = (dir.join("encoder.onnx"), dir.join("decoder.onnx"), dir.join("joiner.onnx"), dir.join("tokens.txt"));
     if !tok.exists() || !enc.exists() { return Err("reazon_model_missing".into()); }
+    srv.log.lock().unwrap().clear();
     let (mut rx, child) = app
         .shell()
         .sidecar("sherpa-onnx-offline-websocket-server")
@@ -437,7 +449,19 @@ fn reazon_start_inner(app: &tauri::AppHandle, srv: &ReazonSrv) -> Result<(), Str
         ])
         .spawn()
         .map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn(async move { while rx.recv().await.is_some() {} });
+    let logbuf = srv.log.clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_shell::process::CommandEvent;
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                CommandEvent::Stdout(b) => reazon_push_log(&logbuf, String::from_utf8_lossy(&b).trim_end().to_string()),
+                CommandEvent::Stderr(b) => reazon_push_log(&logbuf, String::from_utf8_lossy(&b).trim_end().to_string()),
+                CommandEvent::Error(e) => reazon_push_log(&logbuf, format!("[error] {}", e)),
+                CommandEvent::Terminated(t) => reazon_push_log(&logbuf, format!("[terminated] code={:?} signal={:?}", t.code, t.signal)),
+                _ => {}
+            }
+        }
+    });
     *g = Some(child);
     Ok(())
 }
@@ -449,8 +473,14 @@ fn reazon_load(app: tauri::AppHandle, srv: tauri::State<'_, ReazonSrv>) -> Resul
 
 #[tauri::command]
 fn reazon_stop(srv: tauri::State<'_, ReazonSrv>) -> Result<(), String> {
-    if let Some(c) = srv.0.lock().unwrap().take() { let _ = c.kill(); }
+    if let Some(c) = srv.child.lock().unwrap().take() { let _ = c.kill(); }
     Ok(())
+}
+
+// サイドカーの直近出力を返す（不具合診断用）
+#[tauri::command]
+fn reazon_log(srv: tauri::State<'_, ReazonSrv>) -> String {
+    srv.log.lock().unwrap().join("\n")
 }
 
 // サーバー返却JSONから "text" を取り出す
@@ -486,7 +516,16 @@ async fn transcribe_reazon(app: tauri::AppHandle, state: tauri::State<'_, Licens
             Err(e) => { last = e.to_string(); tokio::time::sleep(std::time::Duration::from_millis(200)).await; }
         }
     }
-    let mut ws = ws.ok_or_else(|| format!("音声サーバーに接続できません: {}", last))?;
+    let mut ws = match ws {
+        Some(w) => w,
+        None => {
+            // 接続不可：サイドカーの出力を添えて返し、死んだプロセスは破棄して次回に再起動させる
+            let log = srv.log.lock().unwrap().join(" / ");
+            if let Some(c) = srv.child.lock().unwrap().take() { let _ = c.kill(); }
+            let detail = if log.is_empty() { "(サイドカー出力なし＝起動に失敗の可能性)".to_string() } else { log };
+            return Err(format!("音声サーバーに接続できません: {} ｜ {}", last, detail));
+        }
+    };
     ws.send(Message::Binary(payload)).await.map_err(|e| e.to_string())?;
     let mut result = String::new();
     while let Some(m) = ws.next().await {
@@ -511,8 +550,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(Licensed(Mutex::new(false)))
         .manage(WhisperSrv(Mutex::new(None)))
-        .manage(ReazonSrv(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license, app_version, check_update, install_update, model_exists, download_model, transcribe, start_whisper, stop_whisper, transcribe_chunk, reazon_model_exists, download_reazon_model, reazon_load, reazon_stop, transcribe_reazon])
+        .manage(ReazonSrv { child: Mutex::new(None), log: std::sync::Arc::new(Mutex::new(Vec::new())) })
+        .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license, app_version, check_update, install_update, model_exists, download_model, transcribe, start_whisper, stop_whisper, transcribe_chunk, reazon_model_exists, download_reazon_model, reazon_load, reazon_stop, reazon_log, transcribe_reazon])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

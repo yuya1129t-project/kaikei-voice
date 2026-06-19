@@ -363,7 +363,8 @@ function commitSeg(tR,tC,s,e){
       if(DELCMD.test(txt)){ clearCell(tR,k); return; }
       if(GRPCMD.test(txt)){ toggleGroup(tR); return; }
       if([...txt].length <= 1 && !/[0-9０-９]/.test(txt)) return;   // 1文字（数字以外）＝ノイズの幻聴とみなし破棄
-      fillCell(tR,k,txt); }).catch(()=>{});
+      fillCell(tR,k,txt); })
+    .catch(e=>{ toast('認識できませんでした: '+e, 12000); });   // 無言で失敗させず原因を表示（サイドカー出力を含む）
 }
 // 移動：録音中は今のセルを確定して次セグメント開始、非録音時はフォーカス移動
 function goCell(r,c){
