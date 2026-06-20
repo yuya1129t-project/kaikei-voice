@@ -96,6 +96,7 @@
     <div class="row" style="margin-bottom:10px">
       <button class="mic" id="micBtn">🎤 音声入力（Space）</button>
       <button class="ghost" id="sampleBtn">サンプルを入れる</button>
+      <button class="ghost" id="masterBtn">⚙ マスタ編集</button>
     </div>
     <div class="settings row">
       <span><label>年</label><input id="year" type="number" value="2026"></span>
@@ -134,22 +135,54 @@
   </div>
 </main>
 
+<div id="masterModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9998; align-items:center; justify-content:center;">
+  <div style="background:#fff; width:min(860px,94vw); max-height:90vh; overflow:auto; border-radius:12px; padding:18px 20px; box-shadow:0 12px 40px rgba(0,0,0,.3);">
+    <h2 style="margin:0 0 4px; font-size:17px; color:#1c2530;">マスタ編集</h2>
+    <p style="color:#5a6675; font-size:12px; margin:0 0 14px; line-height:1.5;">1行に1件。音声入力はここに登録した語へ吸着します（最も近いものに置換、近いものが無ければ言ったまま）。変更内容はこの端末に保存されます。</p>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+      <div><label style="font-weight:600; font-size:13px; color:#243;">店舗（1行1件）</label>
+        <textarea id="m-vendors" style="width:100%; box-sizing:border-box; height:170px; font-size:13px; padding:8px; border:1px solid #c9d2dc; border-radius:8px; resize:vertical;"></textarea></div>
+      <div><label style="font-weight:600; font-size:13px; color:#243;">勘定科目（1行1件）</label>
+        <textarea id="m-accounts" style="width:100%; box-sizing:border-box; height:170px; font-size:13px; padding:8px; border:1px solid #c9d2dc; border-radius:8px; resize:vertical;"></textarea></div>
+      <div><label style="font-weight:600; font-size:13px; color:#243;">補助科目（1行1件）</label>
+        <textarea id="m-subs" style="width:100%; box-sizing:border-box; height:170px; font-size:13px; padding:8px; border:1px solid #c9d2dc; border-radius:8px; resize:vertical;"></textarea></div>
+      <div><label style="font-weight:600; font-size:13px; color:#243;">別名 → 正式名（例: えねおす=ENEOS）</label>
+        <textarea id="m-aliases" style="width:100%; box-sizing:border-box; height:170px; font-size:13px; padding:8px; border:1px solid #c9d2dc; border-radius:8px; resize:vertical;"></textarea></div>
+    </div>
+    <div class="row" style="margin-top:16px; justify-content:flex-end; gap:8px;">
+      <button class="ghost" id="m-reset">既定を読み込む</button>
+      <button class="ghost" id="m-cancel">閉じる</button>
+      <button class="green" id="m-save">保存</button>
+    </div>
+  </div>
+</div>
+
 <script>
-// ───────── マスタ（デモ用。本番は先生の弥生マスタを丸ごと読み込む） ─────────
-const ACCOUNTS = ["消耗品費","旅費交通費","車両費","会議費","接待費","接待交際費","交際費","通信費","新聞図書費",
+// ───────── マスタ（先生が画面から編集可。端末に保存(localStorage)。未設定は既定値を使用） ─────────
+const DEFAULT_ACCOUNTS = ["消耗品費","旅費交通費","車両費","会議費","接待費","接待交際費","交際費","通信費","新聞図書費",
   "水道光熱費","福利厚生費","事務用品費","雑費","修繕費","支払手数料","荷造運賃","広告宣伝費","租税公課"];
-const SUBS = ["事務用品","電車代","タクシー代","ガソリン代","ガソリン","打合せ","会議","切手","コピー代",
+const DEFAULT_SUBS = ["事務用品","電車代","タクシー代","ガソリン代","ガソリン","打合せ","会議","切手","コピー代",
   "インターネット代","電話代","書籍","駐車場代","高速代"];
-const VENDORS = ["セブンイレブン","ローソン","ファミリーマート","ENEOS","エネオス","出光","JR東日本","JR",
+const DEFAULT_VENDORS = ["セブンイレブン","ローソン","ファミリーマート","ENEOS","エネオス","出光","JR東日本","JR",
   "スターバックス","スタバ","NTT","Amazon","ヤマト運輸","佐川急便"];
-// 店舗の表記ゆれ・別名 → 正式名（音声認識の癖を吸収。例：Whisperは「セブンイレブン」を "7-11" と書きがち）
-const VENDOR_ALIAS = {
+// 店舗の表記ゆれ・別名 → 正式名（音声認識の癖を吸収。例：「えねおす」→ ENEOS）
+const DEFAULT_VENDOR_ALIAS = {
   "7-11":"セブンイレブン","711":"セブンイレブン","7‑11":"セブンイレブン","7-eleven":"セブンイレブン","セブン":"セブンイレブン","セブイレ":"セブンイレブン",
   "ファミマ":"ファミリーマート","ローソン100":"ローソン","スタバ":"スターバックス",
   "アマゾン":"Amazon","amazon":"Amazon","ヤマト":"ヤマト運輸","クロネコ":"ヤマト運輸","佐川":"佐川急便","エヌティティ":"NTT",
   "エネオス":"ENEOS","えねおす":"ENEOS","ジェイアール":"JR東日本"
 };
-const VENDOR_MATCH = VENDORS.concat(Object.keys(VENDOR_ALIAS));   // 照合は別名キーも対象に
+// 実際に使うマスタ（編集内容を反映。VENDOR_MATCHは別名キーも照合対象に）
+let ACCOUNTS=[], SUBS=[], VENDORS=[], VENDOR_ALIAS={}, VENDOR_MATCH=[];
+function loadMasters(){
+  let m={}; try{ m=JSON.parse(localStorage.getItem('kv_masters')||'{}')||{}; }catch(_){ m={}; }
+  ACCOUNTS = ('accounts' in m && Array.isArray(m.accounts)) ? m.accounts.slice() : DEFAULT_ACCOUNTS.slice();
+  SUBS     = ('subs'     in m && Array.isArray(m.subs))     ? m.subs.slice()     : DEFAULT_SUBS.slice();
+  VENDORS  = ('vendors'  in m && Array.isArray(m.vendors))  ? m.vendors.slice()  : DEFAULT_VENDORS.slice();
+  VENDOR_ALIAS = ('aliases' in m && m.aliases && typeof m.aliases==='object') ? Object.assign({},m.aliases) : Object.assign({},DEFAULT_VENDOR_ALIAS);
+  VENDOR_MATCH = VENDORS.concat(Object.keys(VENDOR_ALIAS));   // 照合は別名キーも対象に
+}
+loadMasters();
 function canonVendor(v){ return VENDOR_ALIAS[v] || v; }           // 一致した別名を正式名へ
 
 // ───────── あいまい照合（音声が崩れても固定マスタへ吸着） ─────────
@@ -631,6 +664,30 @@ $('tbody').addEventListener('mousedown', e=>{
 function fillDatalist(id, items){ $(id).innerHTML = items.map(v=>`<option value="${v}">`).join(''); }
 fillDatalist('dl-acc', ACCOUNTS);
 fillDatalist('dl-tax', ['課対仕入内10%適格','課対仕入内8%適格','対象外','課税売上内10%適格','課税売上内8%適格','非課仕入','非課売上']);
+
+// ───────── マスタ編集（画面から追加・削除。端末に保存） ─────────
+function _lines(t){ return (t||'').split('\n').map(s=>s.trim()).filter(Boolean); }
+function _aliasText(obj){ return Object.keys(obj).map(k=>k+'='+obj[k]).join('\n'); }
+function _parseAlias(t){ const o={}; _lines(t).forEach(line=>{ const i=line.indexOf('='); if(i>0){ const k=line.slice(0,i).trim(), v=line.slice(i+1).trim(); if(k&&v) o[k]=v; } }); return o; }
+function masterFill(vendors, accounts, subs, alias){
+  $('m-vendors').value = vendors.join('\n'); $('m-accounts').value = accounts.join('\n');
+  $('m-subs').value = subs.join('\n'); $('m-aliases').value = _aliasText(alias);
+}
+function openMaster(){ masterFill(VENDORS, ACCOUNTS, SUBS, VENDOR_ALIAS); $('masterModal').style.display='flex'; }
+function closeMaster(){ $('masterModal').style.display='none'; }
+function saveMaster(){
+  const m={ vendors:_lines($('m-vendors').value), accounts:_lines($('m-accounts').value), subs:_lines($('m-subs').value), aliases:_parseAlias($('m-aliases').value) };
+  try{ localStorage.setItem('kv_masters', JSON.stringify(m)); }catch(_){}
+  loadMasters(); fillDatalist('dl-acc', ACCOUNTS);   // 吸着リスト＋プルダウンに即反映
+  closeMaster(); toast('マスタを保存しました');
+}
+if($('masterBtn')){
+  $('masterBtn').onclick = openMaster;
+  $('m-cancel').onclick = closeMaster;
+  $('m-save').onclick = saveMaster;
+  $('m-reset').onclick = ()=>{ masterFill(DEFAULT_VENDORS, DEFAULT_ACCOUNTS, DEFAULT_SUBS, DEFAULT_VENDOR_ALIAS); toast('既定を読み込みました（「保存」で確定）'); };
+  $('masterModal').addEventListener('click', e=>{ if(e.target.id==='masterModal') closeMaster(); });  // 背景クリックで閉じる
+}
 
 // ───────── CSV出力 ─────────
 function q(s){ return '"'+String(s).replace(/"/g,'""')+'"'; }
