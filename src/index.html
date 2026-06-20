@@ -535,7 +535,7 @@ async function whisperStart(){
   try{ await T.core.invoke('reazon_load'); }catch(e){ toast('音声エンジンの起動に失敗: '+e); return; }
   try{ recStream = await navigator.mediaDevices.getUserMedia({audio:true}); try{localStorage.setItem('micGranted','1');}catch(_){} }
   catch(e){ toast('マイクを使用できません（権限をご確認ください）'); return; }
-  recCtx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+  recCtx = new (window.AudioContext||window.webkitAudioContext)();   // レートを強制しない：WindowsのWebView2は16kHz強制＋マイク48kHzのリサンプリングで無音(全ゼロ)になる。ネイティブレートで録り、実レートをサーバーへ渡す（サーバー側で16kHzへ変換）
   try{ if(recCtx.state!=='running') await recCtx.resume(); }catch(_){}   // サスペンド状態だと音声が取れない→確実に再開（Macの「時々認識しない」対策）
   recRate = recCtx.sampleRate||16000;   // 実際の録音レート（16kHz要求を無視する環境＝WindowsのWebView2対策。サーバーへ正しいレートを伝える）
   const src = recCtx.createMediaStreamSource(recStream);
