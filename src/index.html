@@ -352,17 +352,19 @@ function clearCell(i,k){
 }
 // 録音中の音声セグメント[s,e]を対象セルへ確定（常駐サーバーで認識・無発話はスキップ）
 function commitSeg(tR,tC,s,e){
-  if(e-s < SR16*0.2) return;
+  if(e-s < recRate*0.2) return;                             // 0.2秒未満は無視（実レート基準）
   const seg=_sliceRange(s,e);
   let sum=0, peak=0; for(let n=0;n<seg.length;n++){ const a=seg[n]<0?-seg[n]:seg[n]; sum+=seg[n]*seg[n]; if(a>peak) peak=a; }
   const rms=Math.sqrt(sum/(seg.length||1));
-  if(peak < 0.03 || rms < 0.004) return;                    // ピーク＋RMSの二段でノイズ床/無音をスキップ
   const k=EDCOLS[tC];
-  window.__TAURI__.core.invoke('transcribe_reazon',{ samples:Array.from(seg) })
-    .then(txt=>{ txt=_clean(txt); if(!txt) return;
+  if(peak < 0.03 || rms < 0.004){                           // ピーク＋RMSの二段でノイズ床/無音をスキップ（無言にせず理由を表示）
+    toast(`🔎音が小さくスキップ peak=${peak.toFixed(3)} rms=${rms.toFixed(4)} 長さ=${(seg.length/recRate).toFixed(1)}s ${recRate}Hz`, 9000); return; }
+  window.__TAURI__.core.invoke('transcribe_reazon',{ samples:Array.from(seg), sampleRate:recRate })
+    .then(txt=>{ const raw=(txt||''); txt=_clean(txt);
+      if(!txt){ toast(`🔎認識結果が空 peak=${peak.toFixed(3)} ${recRate}Hz raw="${raw.slice(0,24)}"`, 9000); return; }
       if(DELCMD.test(txt)){ clearCell(tR,k); return; }
       if(GRPCMD.test(txt)){ toggleGroup(tR); return; }
-      if([...txt].length <= 1 && !/[0-9０-９]/.test(txt)) return;   // 1文字（数字以外）＝ノイズの幻聴とみなし破棄
+      if([...txt].length <= 1 && !/[0-9０-９]/.test(txt)){ toast(`🔎1文字で破棄 "${txt}"`, 7000); return; }   // ノイズの幻聴とみなし破棄
       fillCell(tR,k,txt); })
     .catch(e=>{ toast('認識できませんでした: '+e, 12000); });   // 無言で失敗させず原因を表示（サイドカー出力を含む）
 }
@@ -497,7 +499,7 @@ const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const micBtn = $('micBtn');
 
 // ── デスクトップ：セル単位の音声（常駐サーバーへ送って高速確定。十字キー/クリック/停止で区切り） ──
-let recCtx=null, recStream=null, recProc=null, recBufs=[], recording=false;
+let recCtx=null, recStream=null, recProc=null, recBufs=[], recording=false, recRate=16000;
 const SR16 = 16000;
 const JUNK = /^(ご視聴ありがとうございました|ご清聴ありがとうございました|\[BLANK_AUDIO\]|\(.*?\)|（.*?）)?$/;  // 念のための幻聴除去
 function _count(){ let t=0; for(const b of recBufs) t+=b.length; return t; }
@@ -535,6 +537,7 @@ async function whisperStart(){
   catch(e){ toast('マイクを使用できません（権限をご確認ください）'); return; }
   recCtx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
   try{ if(recCtx.state!=='running') await recCtx.resume(); }catch(_){}   // サスペンド状態だと音声が取れない→確実に再開（Macの「時々認識しない」対策）
+  recRate = recCtx.sampleRate||16000;   // 実際の録音レート（16kHz要求を無視する環境＝WindowsのWebView2対策。サーバーへ正しいレートを伝える）
   const src = recCtx.createMediaStreamSource(recStream);
   recProc = recCtx.createScriptProcessor(4096,1,1);
   recBufs=[]; segStart=0;

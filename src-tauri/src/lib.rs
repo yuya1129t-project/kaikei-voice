@@ -526,14 +526,16 @@ fn reazon_extract_text(s: &str) -> String {
 
 // 録音PCM(16kHz mono f32)を 常駐サーバーへWSで送って文字化（高速）
 #[tauri::command]
-async fn transcribe_reazon(app: tauri::AppHandle, state: tauri::State<'_, Licensed>, srv: tauri::State<'_, ReazonSrv>, samples: Vec<f32>) -> Result<String, String> {
+async fn transcribe_reazon(app: tauri::AppHandle, state: tauri::State<'_, Licensed>, srv: tauri::State<'_, ReazonSrv>, samples: Vec<f32>, sample_rate: Option<i32>) -> Result<String, String> {
     if !*state.0.lock().unwrap() { return Err("ライセンスが有効ではありません".into()); }
     reazon_start_inner(&app, srv.inner())?;                 // 未起動なら起動（モデル1回ロード）
     if samples.is_empty() { return Ok(String::new()); }
+    // 実際の録音レートを使う（16kHz要求が無視される環境＝WindowsのWebView2でも正しく認識させる。sherpa側で16kHzへ再サンプリングされる）
+    let sr = sample_rate.filter(|r| *r >= 8000 && *r <= 192000).unwrap_or(16000);
     // ペイロード: [i32 sample_rate][i32 byte長][f32 samples...]（リトルエンディアン）
     let byte_len = (samples.len() * 4) as i32;
     let mut payload = Vec::with_capacity(8 + samples.len() * 4);
-    payload.extend_from_slice(&16000i32.to_le_bytes());
+    payload.extend_from_slice(&sr.to_le_bytes());
     payload.extend_from_slice(&byte_len.to_le_bytes());
     for &s in &samples { payload.extend_from_slice(&s.to_le_bytes()); }
 
