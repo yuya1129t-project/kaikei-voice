@@ -372,7 +372,7 @@ function fillCell(i,k,text){
   r[k]=v;
   const el=cellInputEl(i,EDCOLS.indexOf(k)); if(el){ el.value=v; const tr=el.closest('tr'); if(tr) tr.className=rowClass(r); }
   if(i===rows.length-1 && !isRowEmpty(rows[i])){ rows.push(emptyRow()); $('tbody').appendChild(rowTr(rows.length-1)); }
-  highlightCell();
+  persist(); highlightCell();
 }
 // 音声でセルを消すコマンド（その語だけを言ったらアクティブセルを空に）
 const DELCMD = /^(削除|消去|消して|けして|消す|クリア|くりあ|取り消し|取消|とりけし)$/;
@@ -381,7 +381,7 @@ const GRPCMD = /^(複合|ふくごう|複合仕訳|同じ伝票|まとめ|まと
 function clearCell(i,k){
   const r=rows[i]; if(!r) return; r[k]='';
   const el=cellInputEl(i,EDCOLS.indexOf(k)); if(el){ el.value=''; const tr=el.closest('tr'); if(tr) tr.className=rowClass(r); }
-  highlightCell();
+  persist(); highlightCell();
 }
 // 録音中の音声セグメント[s,e]を対象セルへ確定（常駐サーバーで認識・無発話はスキップ）
 function commitSeg(tR,tC,s,e){
@@ -477,6 +477,7 @@ function cellInput(e){
   rows[i][k]=e.target.value;
   e.target.closest('tr').className = rowClass(rows[i]);
   if(i===rows.length-1 && !isRowEmpty(rows[i])){ rows.push(emptyRow()); $('tbody').appendChild(rowTr(rows.length-1)); }  // 末尾行に入力→自動で次の行
+  persist();
 }
 function cellFocus(e){ activeR=+e.target.dataset.i; activeC=EDCOLS.indexOf(e.target.dataset.k); highlightCell(); }
 function cellKey(e){   // 手入力中の十字キー移動（カーソル端でセル移動）
@@ -512,9 +513,30 @@ function rowTr(i){
   const lk=tr.querySelector('.lnk'); if(lk) lk.onclick = ()=> toggleGroup(i);
   return tr;
 }
+// ───────── 入力データの自動保存・復元（端末に保持。閉じる/落ちても消えない） ─────────
+let _persistT=null;
+function persist(){
+  if(_persistT) clearTimeout(_persistT);
+  _persistT=setTimeout(()=>{ try{ localStorage.setItem('kv_state', JSON.stringify({
+    rows, groupSeq, year:$('year').value, counter:$('counter').value, taxd:$('taxd').value
+  })); }catch(_){} }, 400);   // 連打を400msデバウンス
+}
+function restoreState(){
+  let st=null; try{ st=JSON.parse(localStorage.getItem('kv_state')||'null'); }catch(_){ st=null; }
+  if(!st || !Array.isArray(st.rows)) return false;
+  const restored = st.rows.map(r=>Object.assign(emptyRow(), r));   // 欠損キーを既定で補完
+  if(!restored.some(r=>!isRowEmpty(r))) return false;              // 中身が無ければ復元しない
+  rows = restored; groupSeq = (+st.groupSeq||0);
+  if(st.year!=null) $('year').value=st.year;
+  if(st.counter!=null) $('counter').value=st.counter;
+  if(st.taxd!=null) $('taxd').value=st.taxd;
+  ensureTrailingEmpty();
+  return true;
+}
 function render(){
   const tb = $('tbody'); tb.innerHTML='';
   rows.forEach((r,i)=> tb.appendChild(rowTr(i)));
+  persist();
 }
 
 // ───────── ボタン群 ─────────
@@ -783,7 +805,11 @@ $('excelBtn').onclick = ()=>{
   download('﻿'+[head,...body].join('\r\n'), 'excel_local.csv', 'text/csv');
 };
 
-rows=[emptyRow()]; render();   // 最初から1行（空）を用意
+const _restored = restoreState();          // 前回の入力があれば復元
+if(!rows.length) rows=[emptyRow()];        // 無ければ空1行
+render();
+['year','counter','taxd'].forEach(id=>{ const e=$(id); if(e) e.addEventListener('input', persist); });   // ヘッダ設定も自動保存
+if(_restored) setTimeout(()=>toast('前回の入力を復元しました（「表をクリア」で消去）', 5000), 300);
 
 // ───────── 自動アップデート（デスクトップアプリ内のみ） ─────────
 function toast(msg, ms){
