@@ -417,6 +417,36 @@ const REAZON_PORT: u16 = 8766;
 struct ReazonSrv {
     child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     log: std::sync::Arc<Mutex<Vec<String>>>,   // サイドカーの出力(stdout/stderr)を保持→失敗時の原因表示用
+    port: Mutex<u16>,                          // 実際に使用中のポート（毎回動的に空きを取得）
+}
+
+// 前回起動時に残った（orphan）サイドカーを確実に終了。ポート使用中(EADDRINUSE)で
+// sherpaが websocketpp 例外→即クラッシュするのを防ぐ＋多重常駐によるメモリ浪費も防ぐ。
+fn kill_stale_sidecars() {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "sherpa-onnx-offline-websocket-server.exe"])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW（黒い窓を出さない）
+            .output();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("pkill")
+            .args(["-9", "-f", "sherpa-onnx-offline-websocket-server"])
+            .output();
+    }
+    std::thread::sleep(std::time::Duration::from_millis(250)); // ポート解放を待つ
+}
+
+// 空きポートをOSに割り当ててもらう（衝突回避）
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .ok()
+        .and_then(|l| l.local_addr().ok())
+        .map(|a| a.port())
+        .unwrap_or(REAZON_PORT)
 }
 
 fn reazon_push_log(buf: &std::sync::Arc<Mutex<Vec<String>>>, s: String) {
@@ -434,13 +464,16 @@ fn reazon_start_inner(app: &tauri::AppHandle, srv: &ReazonSrv) -> Result<(), Str
     let dir = reazon_dir(app);
     let (enc, dec, joi, tok) = (dir.join("encoder.onnx"), dir.join("decoder.onnx"), dir.join("joiner.onnx"), dir.join("tokens.txt"));
     if !tok.exists() || !enc.exists() { return Err("reazon_model_missing".into()); }
+    kill_stale_sidecars();                 // 前回の残骸を掃除（ポート衝突→クラッシュ防止）
+    let port = free_port();                // 毎回空きポートを取得して衝突を物理的に回避
+    *srv.port.lock().unwrap() = port;
     srv.log.lock().unwrap().clear();
     let (mut rx, child) = app
         .shell()
         .sidecar("sherpa-onnx-offline-websocket-server")
         .map_err(|e| e.to_string())?
         .args([
-            format!("--port={}", REAZON_PORT),
+            format!("--port={}", port),
             format!("--encoder={}", enc.to_string_lossy()),
             format!("--decoder={}", dec.to_string_lossy()),
             format!("--joiner={}", joi.to_string_lossy()),
@@ -506,7 +539,8 @@ async fn transcribe_reazon(app: tauri::AppHandle, state: tauri::State<'_, Licens
 
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
-    let url = format!("ws://127.0.0.1:{}", REAZON_PORT);
+    let port = *srv.port.lock().unwrap();
+    let url = format!("ws://127.0.0.1:{}", port);
     // サーバー起動直後はモデルロード中で接続不可なのでリトライ（最大~8秒）
     let mut ws = None;
     let mut last = String::new();
@@ -550,7 +584,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(Licensed(Mutex::new(false)))
         .manage(WhisperSrv(Mutex::new(None)))
-        .manage(ReazonSrv { child: Mutex::new(None), log: std::sync::Arc::new(Mutex::new(Vec::new())) })
+        .manage(ReazonSrv { child: Mutex::new(None), log: std::sync::Arc::new(Mutex::new(Vec::new())), port: Mutex::new(REAZON_PORT) })
         .invoke_handler(tauri::generate_handler![save_file, activate_license, check_license, app_version, check_update, install_update, model_exists, download_model, transcribe, start_whisper, stop_whisper, transcribe_chunk, reazon_model_exists, download_reazon_model, reazon_load, reazon_stop, reazon_log, transcribe_reazon])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
