@@ -548,12 +548,12 @@ async function whisperStart(){
   let has=false; try{ has = await T.core.invoke('reazon_model_exists'); }catch(_){}
   if(!has){
     const bar=document.getElementById('dlBar'), fill=document.getElementById('dlFill'), pct=document.getElementById('dlPct'), msg=document.getElementById('dlMsg');
-    msg.textContent='音声モデルをダウンロード中…（初回のみ・約680MB／DL後に展開で少し待ちます）'; fill.style.width='0%'; pct.textContent='0%'; bar.style.display='block';
+    msg.textContent='音声モデルをダウンロード中…（初回のみ・約160MB）'; fill.style.width='0%'; pct.textContent='0%'; bar.style.display='block';
     micBtn.disabled=true;
     let unlisten=null;
     try{ unlisten = await T.event.listen('model-progress', (e)=>{
       const d=e.payload||{}; const mb=(n)=>Math.floor((n||0)/1048576);
-      if(d.total>0){ const p=Math.min(100,Math.floor(d.downloaded/d.total*100)); fill.style.width=p+'%'; pct.textContent = p>=100 ? '解凍中…（少しお待ちください）' : p+'%（'+mb(d.downloaded)+' / '+mb(d.total)+' MB）'; }
+      if(d.total>0){ const p=Math.min(100,Math.floor(d.downloaded/d.total*100)); fill.style.width=p+'%'; pct.textContent = p>=100 ? 'もうすぐ完了…' : p+'%（'+mb(d.downloaded)+' / '+mb(d.total)+' MB）'; }
       else { pct.textContent=mb(d.downloaded)+' MB'; }
     }); }catch(_){}
     try{ await T.core.invoke('download_reazon_model'); }

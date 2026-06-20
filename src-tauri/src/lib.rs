@@ -361,7 +361,7 @@ fn reazon_model_exists(app: tauri::AppHandle) -> bool {
     d.join("tokens.txt").exists() && d.join("encoder.onnx").exists() && d.join("joiner.onnx").exists()
 }
 
-// ReazonSpeechモデル(.tar.bz2 / int8 約150MB)を初回DL＆解凍（必要4ファイルだけ取り出す）
+// ReazonSpeechモデルの必要4ファイルを直接DL（int8・計約169MB・解凍不要＝軽量＆高速）
 #[tauri::command]
 async fn download_reazon_model(app: tauri::AppHandle) -> Result<(), String> {
     use futures_util::StreamExt;
@@ -369,45 +369,40 @@ async fn download_reazon_model(app: tauri::AppHandle) -> Result<(), String> {
     let dir = reazon_dir(&app);
     if reazon_model_exists(app.clone()) { return Ok(()); }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01.tar.bz2";
-    let tar_path = app_dir(&app).join("reazon.tar.bz2");
-    let resp = reqwest::get(url).await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() { return Err(format!("DL失敗: {}", resp.status())); }
-    let total = resp.content_length().unwrap_or(0);
-    {
-        let mut file = std::fs::File::create(&tar_path).map_err(|e| e.to_string())?;
-        let mut stream = resp.bytes_stream();
-        let mut downloaded: u64 = 0; let mut last: u64 = 0;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| e.to_string())?;
-            file.write_all(&chunk).map_err(|e| e.to_string())?;
-            downloaded += chunk.len() as u64;
-            if downloaded - last >= 2_000_000 {
-                last = downloaded;
-                let _ = app.emit("model-progress", serde_json::json!({"downloaded": downloaded, "total": total}));
+    const BASE: &str = "https://github.com/yuya1129t-project/kaikei-voice/releases/download/model-rsp-ja-v1";
+    // (ダウンロード元ファイル名, 保存名, 概算バイト) — totalはこの合計で進捗表示
+    let files: [(&str, u64); 4] = [
+        ("encoder.onnx", 154_670_139),
+        ("decoder.onnx", 11_767_836),
+        ("joiner.onnx",  2_696_970),
+        ("tokens.txt",   45_754),
+    ];
+    let total: u64 = files.iter().map(|f| f.1).sum();
+    let client = reqwest::Client::new();
+    let mut downloaded: u64 = 0;
+    let mut last: u64 = 0;
+    for (name, _sz) in files.iter() {
+        let url = format!("{}/{}", BASE, name);
+        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        if !resp.status().is_success() { return Err(format!("DL失敗({}): {}", name, resp.status())); }
+        let tmp = dir.join(format!("{}.part", name));
+        {
+            let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| e.to_string())?;
+                file.write_all(&chunk).map_err(|e| e.to_string())?;
+                downloaded += chunk.len() as u64;
+                if downloaded - last >= 2_000_000 {
+                    last = downloaded;
+                    let _ = app.emit("model-progress", serde_json::json!({"downloaded": downloaded, "total": total}));
+                }
             }
         }
+        // 完走したファイルだけ正式名へ（途中で切れても reazon_model_exists が false のまま＝次回やり直し）
+        std::fs::rename(&tmp, dir.join(name)).map_err(|e| e.to_string())?;
     }
-    // 解凍：tar.bz2 → 必要ファイルだけ抽出してリネーム
-    let f = std::fs::File::open(&tar_path).map_err(|e| e.to_string())?;
-    let bz = bzip2::read::BzDecoder::new(f);
-    let mut ar = tar::Archive::new(bz);
-    for entry in ar.entries().map_err(|e| e.to_string())? {
-        let mut entry = entry.map_err(|e| e.to_string())?;
-        let p = entry.path().map_err(|e| e.to_string())?.into_owned();
-        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
-        let dest = if name.contains("encoder") && name.ends_with(".int8.onnx") { Some(dir.join("encoder.onnx")) }
-            else if name.contains("joiner") && name.ends_with(".int8.onnx") { Some(dir.join("joiner.onnx")) }
-            else if name.contains("decoder") && name.ends_with(".onnx") && !name.ends_with(".int8.onnx") { Some(dir.join("decoder.onnx")) }
-            else if name == "tokens.txt" { Some(dir.join("tokens.txt")) }
-            else { None };
-        if let Some(dest) = dest {
-            let mut out = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
-            std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
-        }
-    }
-    let _ = std::fs::remove_file(&tar_path);
-    if !reazon_model_exists(app.clone()) { return Err("モデル展開に失敗（必要ファイルが見つかりません）".into()); }
+    if !reazon_model_exists(app.clone()) { return Err("モデルDLに失敗（必要ファイルが不足）".into()); }
     let _ = app.emit("model-progress", serde_json::json!({"downloaded": total, "total": total, "done": true}));
     Ok(())
 }
