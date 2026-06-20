@@ -356,17 +356,15 @@ function commitSeg(tR,tC,s,e){
   const seg=_sliceRange(s,e);
   let sum=0, peak=0; for(let n=0;n<seg.length;n++){ const a=seg[n]<0?-seg[n]:seg[n]; sum+=seg[n]*seg[n]; if(a>peak) peak=a; }
   const rms=Math.sqrt(sum/(seg.length||1));
+  if(peak < 0.03 || rms < 0.004) return;                    // ピーク＋RMSの二段でノイズ床/無音をスキップ
   const k=EDCOLS[tC];
-  if(peak < 0.03 || rms < 0.004){                           // ピーク＋RMSの二段でノイズ床/無音をスキップ（無言にせず理由を表示）
-    toast(`🔎音が小さくスキップ peak=${peak.toFixed(3)} rms=${rms.toFixed(4)} 長さ=${(seg.length/recRate).toFixed(1)}s ${recRate}Hz`, 9000); return; }
   window.__TAURI__.core.invoke('transcribe_reazon',{ samples:Array.from(seg), sampleRate:recRate })
-    .then(txt=>{ const raw=(txt||''); txt=_clean(txt);
-      if(!txt){ toast(`🔎認識結果が空 peak=${peak.toFixed(3)} ${recRate}Hz raw="${raw.slice(0,24)}"`, 9000); return; }
+    .then(txt=>{ txt=_clean(txt); if(!txt) return;
       if(DELCMD.test(txt)){ clearCell(tR,k); return; }
       if(GRPCMD.test(txt)){ toggleGroup(tR); return; }
-      if([...txt].length <= 1 && !/[0-9０-９]/.test(txt)){ toast(`🔎1文字で破棄 "${txt}"`, 7000); return; }   // ノイズの幻聴とみなし破棄
+      if([...txt].length <= 1 && !/[0-9０-９]/.test(txt)) return;   // 1文字（数字以外）＝ノイズの幻聴とみなし破棄
       fillCell(tR,k,txt); })
-    .catch(e=>{ toast('認識できませんでした: '+e, 12000); });   // 無言で失敗させず原因を表示（サイドカー出力を含む）
+    .catch(e=>{ toast('認識できませんでした: '+e, 8000); });   // 実際の失敗（サイドカー接続不可など）だけ表示
 }
 // 移動：録音中は今のセルを確定して次セグメント開始、非録音時はフォーカス移動
 function goCell(r,c){
