@@ -387,9 +387,16 @@ function clearCell(i,k){
 function commitSeg(tR,tC,s,e){
   if(e-s < recRate*0.2) return;                             // 0.2秒未満は無視（実レート基準）
   const seg=_sliceRange(s,e);
-  let sum=0, peak=0; for(let n=0;n<seg.length;n++){ const a=seg[n]<0?-seg[n]:seg[n]; sum+=seg[n]*seg[n]; if(a>peak) peak=a; }
-  const rms=Math.sqrt(sum/(seg.length||1));
-  if(peak < 0.03 || rms < 0.004) return;                    // ピーク＋RMSの二段でノイズ床/無音をスキップ
+  // 発話検出(VAD)：30msフレームのRMSが発話レベルを一定時間超えていなければ「無音/雑音」としてスキップ
+  // → 何も話さず十字キーで飛ばしたセルは空白のまま（雑音が「はい」等に誤認識されるのを防ぐ）
+  let peak=0; for(let n=0;n<seg.length;n++){ const a=seg[n]<0?-seg[n]:seg[n]; if(a>peak) peak=a; }
+  const frameLen=Math.max(1,Math.round(recRate*0.03)), VOICE_FLOOR=0.02;   // 1フレーム=30ms、発話とみなすRMS下限
+  let voicedMs=0;
+  for(let f=0; f+frameLen<=seg.length; f+=frameLen){
+    let en=0; for(let n=f;n<f+frameLen;n++) en+=seg[n]*seg[n];
+    if(Math.sqrt(en/frameLen) > VOICE_FLOOR) voicedMs+=30;
+  }
+  if(peak < 0.05 || voicedMs < 180) return;                 // ピーク小 or 発話が合計180ms未満＝雑音とみなしスキップ
   const k=EDCOLS[tC];
   window.__TAURI__.core.invoke('transcribe_reazon',{ samples:Array.from(seg), sampleRate:recRate })
     .then(txt=>{ txt=_clean(txt); if(!txt) return;
