@@ -21,6 +21,7 @@
   .appbar h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.2px}
   .appbar .sub{font-size:12px;color:var(--ink3)}
   .saved{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ok);transition:opacity .3s}
+  #bellBtn:hover{background:#f1f3f7;color:var(--ink)}
   .saved .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
   main{max-width:1280px;margin:0 auto;padding:18px 16px 64px}
   .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px}
@@ -116,6 +117,10 @@
   <select id="clientSel" title="顧問先を切り替え（入力・マスタ・出力先が顧客ごとに保存されます）" style="max-width:190px"></select>
   <button class="ghost" id="clientMgmtBtn" style="padding:6px 11px;font-size:12px">管理</button>
   <span class="saved" id="savedInd" style="opacity:0"><span class="dot"></span>自動保存</span>
+  <button id="bellBtn" title="アップデート" aria-label="アップデート" style="position:relative; background:transparent; border:0; padding:5px 6px; cursor:pointer; color:var(--ink2); line-height:0; border-radius:7px">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    <span id="bellDot" style="display:none; position:absolute; top:2px; right:3px; width:9px; height:9px; background:var(--rec); border-radius:50%; border:2px solid var(--surface)"></span>
+  </button>
   <span class="sub" id="appVer"></span>
 </div>
 
@@ -1073,19 +1078,21 @@ function showUpdateBanner(ver){
   };
   later.onclick = ()=>{ b.style.display = 'none'; };
 }
+let pendingUpdate=null;   // 利用可能な新バージョン（ベルの赤ドットに反映）
+function setBellDot(on){ const d=document.getElementById('bellDot'); if(d) d.style.display = on?'block':'none'; }
 async function checkForUpdate(silent){
   const T = window.__TAURI__;
   if(!T || !T.core){ if(!silent) toast('この環境では更新確認できません'); return; }
   let ver;
   try { ver = await T.core.invoke('check_update'); }
   catch(e){ if(!silent) toast('更新確認に失敗しました: ' + e); else console.warn('update check failed', e); return; }
-  if(ver){ showUpdateBanner(ver); }
-  else if(!silent){ toast('お使いのバージョンは最新です'); }
+  if(ver){ pendingUpdate=ver; setBellDot(true); if(!silent) showUpdateBanner(ver); }   // 起動時(silent)はベルに通知のみ、手動クリック時はバナー表示
+  else { pendingUpdate=null; setBellDot(false); if(!silent) toast('お使いのバージョンは最新です'); }
 }
 if(window.__TAURI__){
-  const ub = document.getElementById('updBtn');
-  if(ub){ ub.style.display=''; ub.onclick = ()=> checkForUpdate(false); }
-  setTimeout(()=> checkForUpdate(true), 1500);   // 起動時に静かに確認
+  const bell = document.getElementById('bellBtn');
+  if(bell){ bell.onclick = ()=>{ if(pendingUpdate) showUpdateBanner(pendingUpdate); else checkForUpdate(false); }; }   // 更新があればバナー、無ければ再確認
+  setTimeout(()=> checkForUpdate(true), 1500);   // 起動時に静かに確認（更新があればベルに赤ドット）
 }
 
 // ───────── ライセンス認証ゲート（デスクトップアプリ内のみ） ─────────
