@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "KaikeiVoice",
-  "version": "0.1.48",
+  "version": "0.1.49",
   "identifier": "com.kaikei.voiceinput",
   "build": {
     "frontendDist": "../src"
@@ -11,7 +11,7 @@
     "windows": [
       {
         "title": "音声入力 → 弥生CSV（小口）",
-        "width": 1180,
+        "width": 1280,
         "height": 820,
         "minWidth": 900,
         "minHeight": 600,
