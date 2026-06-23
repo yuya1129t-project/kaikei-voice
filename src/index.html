@@ -112,7 +112,10 @@
   <h1>KaikeiVoice</h1>
   <span class="sub">小口現金を声で入力 → 会計ソフトへ</span>
   <span style="flex:1"></span>
-  <span class="saved" id="savedInd" style="opacity:0"><span class="dot"></span>自動保存しました</span>
+  <span class="sub">顧客</span>
+  <select id="clientSel" title="顧問先を切り替え（入力・マスタ・出力先が顧客ごとに保存されます）" style="max-width:190px"></select>
+  <button class="ghost" id="clientMgmtBtn" style="padding:6px 11px;font-size:12px">管理</button>
+  <span class="saved" id="savedInd" style="opacity:0"><span class="dot"></span>自動保存</span>
   <span class="sub" id="appVer"></span>
 </div>
 
@@ -194,7 +197,49 @@
   </div>
 </div>
 
+<div id="clientModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9998; align-items:center; justify-content:center;">
+  <div style="background:#fff; width:min(560px,94vw); max-height:90vh; overflow:auto; border-radius:12px; padding:18px 20px; box-shadow:0 12px 40px rgba(0,0,0,.3);">
+    <h2 style="margin:0 0 4px; font-size:17px; color:#1b2430;">顧客（顧問先）の管理</h2>
+    <p style="color:#5c6776; font-size:12px; margin:0 0 14px; line-height:1.5;">顧客ごとに、入力データ・マスタ（店舗/勘定科目/補助科目/別名）・出力先が別々に保存されます。</p>
+    <div style="border:1px solid #e7eaf0; border-radius:9px; padding:12px; margin-bottom:14px;">
+      <div style="font-weight:600; font-size:13px; margin-bottom:8px;">新規顧客を追加</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <input id="newClientName" placeholder="例：山田商店" style="flex:1; min-width:150px; padding:8px 10px; border:1px solid #dce1e9; border-radius:7px; font-size:13px;">
+        <select id="copyFromClient" style="padding:8px 10px; border:1px solid #dce1e9; border-radius:7px; font-size:13px;"></select>
+        <button class="green" id="addClientBtn" style="padding:8px 14px;">追加</button>
+      </div>
+      <div style="font-size:11px; color:#9aa4b2; margin-top:6px;">「○○のマスタを複製」を選ぶと、その顧客の店舗・勘定科目・別名をコピーして始められます。</div>
+    </div>
+    <div style="font-weight:600; font-size:13px; margin-bottom:6px;">顧客一覧</div>
+    <div id="clientList"></div>
+    <div class="row" style="margin-top:16px; justify-content:flex-end; gap:8px;">
+      <button class="ghost" id="clientClose">閉じる</button>
+    </div>
+  </div>
+</div>
+
 <script>
+// ───────── 顧客（顧問先）別の保存：localStorageを顧客IDで名前空間化。入力/マスタ/出力先を顧客ごとに独立 ─────────
+let clients=[], currentClientId='';
+function clientKey(base){ return base+'__'+currentClientId; }
+function clientName(id){ const c=clients.find(c=>c.id===id); return c?c.name:''; }
+function saveClients(){ try{ localStorage.setItem('kv_clients', JSON.stringify(clients)); localStorage.setItem('kv_current', currentClientId); }catch(_){} }
+(function initClients(){
+  let list=null, cur='';
+  try{ list=JSON.parse(localStorage.getItem('kv_clients')||'null'); }catch(_){}
+  try{ cur=localStorage.getItem('kv_current')||''; }catch(_){}
+  if(!Array.isArray(list) || !list.length){
+    // 初回/移行：既存の(非名前空間)データを「既定の顧客」へ移す（既存ユーザーのデータを失わない）
+    const id='c'+Date.now().toString(36);
+    clients=[{id, name:'既定の顧客'}]; currentClientId=id;
+    ['kv_state','kv_masters','kv_exporter'].forEach(b=>{ try{ const v=localStorage.getItem(b); if(v!=null) localStorage.setItem(b+'__'+id, v); }catch(_){} });
+    saveClients();
+  } else {
+    clients=list;
+    currentClientId = clients.some(c=>c.id===cur) ? cur : clients[0].id;
+  }
+})();
+
 // ───────── マスタ（先生が画面から編集可。端末に保存(localStorage)。未設定は既定値を使用） ─────────
 const DEFAULT_ACCOUNTS = ["消耗品費","旅費交通費","車両費","会議費","接待費","接待交際費","交際費","通信費","新聞図書費",
   "水道光熱費","福利厚生費","事務用品費","雑費","修繕費","支払手数料","荷造運賃","広告宣伝費","租税公課"];
@@ -212,7 +257,7 @@ const DEFAULT_VENDOR_ALIAS = {
 // 実際に使うマスタ（編集内容を反映。VENDOR_MATCHは別名キーも照合対象に）
 let ACCOUNTS=[], SUBS=[], VENDORS=[], VENDOR_ALIAS={}, VENDOR_MATCH=[];
 function loadMasters(){
-  let m={}; try{ m=JSON.parse(localStorage.getItem('kv_masters')||'{}')||{}; }catch(_){ m={}; }
+  let m={}; try{ m=JSON.parse(localStorage.getItem(clientKey('kv_masters'))||'{}')||{}; }catch(_){ m={}; }
   ACCOUNTS = ('accounts' in m && Array.isArray(m.accounts)) ? m.accounts.slice() : DEFAULT_ACCOUNTS.slice();
   SUBS     = ('subs'     in m && Array.isArray(m.subs))     ? m.subs.slice()     : DEFAULT_SUBS.slice();
   VENDORS  = ('vendors'  in m && Array.isArray(m.vendors))  ? m.vendors.slice()  : DEFAULT_VENDORS.slice();
@@ -584,12 +629,16 @@ function rowTr(i){
 let _persistT=null;
 function persist(){
   if(_persistT) clearTimeout(_persistT);
-  _persistT=setTimeout(()=>{ try{ localStorage.setItem('kv_state', JSON.stringify({
+  _persistT=setTimeout(()=>{ try{ localStorage.setItem(clientKey('kv_state'), JSON.stringify({
     rows, groupSeq, year:$('year').value, counter:$('counter').value, taxd:$('taxd').value
   })); flashSaved(); }catch(_){} }, 400);   // 連打を400msデバウンス
 }
+function flushPersist(){   // 保存待ちを即確定（顧客切替の直前など、取りこぼし防止）
+  if(_persistT){ clearTimeout(_persistT); _persistT=null; }
+  try{ localStorage.setItem(clientKey('kv_state'), JSON.stringify({ rows, groupSeq, year:$('year').value, counter:$('counter').value, taxd:$('taxd').value })); }catch(_){}
+}
 function restoreState(){
-  let st=null; try{ st=JSON.parse(localStorage.getItem('kv_state')||'null'); }catch(_){ st=null; }
+  let st=null; try{ st=JSON.parse(localStorage.getItem(clientKey('kv_state'))||'null'); }catch(_){ st=null; }
   if(!st || !Array.isArray(st.rows)) return false;
   const restored = st.rows.map(r=>Object.assign(emptyRow(), r));   // 欠損キーを既定で補完
   if(!restored.some(r=>!isRowEmpty(r))) return false;              // 中身が無ければ復元しない
@@ -767,7 +816,7 @@ function openMaster(){ masterFill(VENDORS, ACCOUNTS, SUBS, VENDOR_ALIAS); $('mas
 function closeMaster(){ $('masterModal').style.display='none'; }
 function saveMaster(){
   const m={ vendors:_lines($('m-vendors').value), accounts:_lines($('m-accounts').value), subs:_lines($('m-subs').value), aliases:_parseAlias($('m-aliases').value) };
-  try{ localStorage.setItem('kv_masters', JSON.stringify(m)); }catch(_){}
+  try{ localStorage.setItem(clientKey('kv_masters'), JSON.stringify(m)); }catch(_){}
   loadMasters(); fillDatalist('dl-acc', ACCOUNTS);   // 吸着リスト＋プルダウンに即反映
   closeMaster(); toast('マスタを保存しました');
 }
@@ -863,7 +912,7 @@ const EXPORTERS = {
   generic: { id:'generic', name:'汎用CSV',          ready:false },
 };
 let exporterId = 'yayoi';
-try{ const sv=localStorage.getItem('kv_exporter'); if(sv && EXPORTERS[sv] && EXPORTERS[sv].ready) exporterId=sv; }catch(_){}
+try{ const sv=localStorage.getItem(clientKey('kv_exporter')); if(sv && EXPORTERS[sv] && EXPORTERS[sv].ready) exporterId=sv; }catch(_){}
 function curExporter(){ const e=EXPORTERS[exporterId]; return (e&&e.ready)?e:EXPORTERS.yayoi; }
 function refreshExporterUI(){
   const ex=curExporter();
@@ -877,7 +926,10 @@ function runExport(){
   const ex=curExporter();
   const out=ex.build(data, { counter:$('counter').value, taxd:$('taxd').value, year:$('year').value });
   if(out.warn) alert(out.warn);
-  download(out.bytes||out.text, out.filename, out.mime);
+  // ファイル名に顧客名を付与（例：yayoi_import_山田商店.txt）
+  let fn=out.filename; const cn=(clientName(currentClientId)||'').replace(/[\\/:*?"<>|\s]/g,'').trim();
+  if(cn){ const d=fn.lastIndexOf('.'); fn = d>0 ? fn.slice(0,d)+'_'+cn+fn.slice(d) : fn+'_'+cn; }
+  download(out.bytes||out.text, fn, out.mime);
 }
 if($('exportBtn')) $('exportBtn').onclick = runExport;
 // 出力先セレクタ：実装済みサービスのみ切替可（未対応は近日対応の案内）
@@ -888,7 +940,7 @@ if($('exportBtn')) $('exportBtn').onclick = runExport;
   sel.onchange = ()=>{
     const k=sel.value;
     if(!EXPORTERS[k] || !EXPORTERS[k].ready){ toast(EXPORTERS[k]?.name+' は近日対応です（今は弥生のみ）', 4000); sel.value=exporterId; return; }
-    exporterId=k; try{ localStorage.setItem('kv_exporter', k); }catch(_){}
+    exporterId=k; try{ localStorage.setItem(clientKey('kv_exporter'), k); }catch(_){}
     const td=$('taxd'); if(td && EXPORTERS[k].defaultTax) td.value=EXPORTERS[k].defaultTax;
     refreshExporterUI();
   };
@@ -936,6 +988,67 @@ if(!rows.length) rows=[emptyRow()];        // 無ければ空1行
 refreshExporterUI();                       // 出力先に応じて税区分候補・ボタン名・注意書きを設定
 render();
 applyColW(); setupColResize();             // 列幅の復元＋ドラッグ調整を有効化
+
+// ───────── 顧客（顧問先）の管理UI ─────────
+function populateClientSel(){ const sel=$('clientSel'); if(!sel) return; sel.innerHTML=clients.map(c=>`<option value="${c.id}">${escAttr(c.name)}</option>`).join(''); sel.value=currentClientId; }
+function loadCurrentClientData(){   // 現在の顧客のマスタ・出力先・設定・入力を読み込んで画面に反映
+  loadMasters(); fillDatalist('dl-acc', ACCOUNTS);
+  let ex='yayoi'; try{ const sv=localStorage.getItem(clientKey('kv_exporter')); if(sv && EXPORTERS[sv] && EXPORTERS[sv].ready) ex=sv; }catch(_){}
+  exporterId=ex; const es=$('exporterSel'); if(es) es.value=ex; refreshExporterUI();
+  $('year').value='2026'; $('counter').value='現金'; $('taxd').value=(curExporter().defaultTax||'課対仕入内10%適格');
+  rows=[]; groupSeq=0; if(!restoreState()) rows=[emptyRow()];
+  render(); highlightCell();
+}
+function switchClient(id){
+  if(!clients.some(c=>c.id===id) || id===currentClientId){ const sel=$('clientSel'); if(sel) sel.value=currentClientId; return; }
+  flushPersist();   // 現在の顧客の編集を確定保存してから切替
+  currentClientId=id; saveClients(); loadCurrentClientData(); populateClientSel();
+  toast('顧客「'+clientName(id)+'」に切り替えました');
+}
+function addClient(){
+  const name=($('newClientName').value||'').trim(); if(!name){ $('newClientName').focus(); return; }
+  const from=$('copyFromClient').value, id='c'+Date.now().toString(36);
+  clients.push({id, name});
+  if(from){ try{ const m=localStorage.getItem('kv_masters__'+from); if(m!=null) localStorage.setItem('kv_masters__'+id, m); }catch(_){} }   // マスタ複製（任意）
+  flushPersist();   // 現在の顧客を確定保存してから新規顧客へ切替
+  currentClientId=id; saveClients();
+  $('newClientName').value='';
+  loadCurrentClientData(); populateClientSel(); renderClientList(); populateCopyFrom();
+  toast('顧客「'+name+'」を追加しました');
+}
+function renameClient(id,name){ const c=clients.find(c=>c.id===id); if(c){ c.name=name; saveClients(); populateClientSel(); } }
+function deleteClient(id){
+  if(clients.length<=1){ alert('最後の1顧客は削除できません'); return; }
+  if(!confirm('顧客「'+clientName(id)+'」のデータ・マスタを完全に削除します。よろしいですか？')) return;
+  clients=clients.filter(c=>c.id!==id);
+  ['kv_state','kv_masters','kv_exporter'].forEach(b=>{ try{ localStorage.removeItem(b+'__'+id); }catch(_){} });
+  if(currentClientId===id){ currentClientId=clients[0].id; loadCurrentClientData(); }
+  saveClients(); populateClientSel(); renderClientList(); populateCopyFrom();
+}
+function populateCopyFrom(){ const s=$('copyFromClient'); if(!s) return; s.innerHTML='<option value="">マスタを複製しない</option>'+clients.map(c=>`<option value="${c.id}">${escAttr(c.name)}のマスタを複製</option>`).join(''); }
+function renderClientList(){
+  const box=$('clientList'); if(!box) return; box.innerHTML='';
+  clients.forEach(c=>{
+    const row=document.createElement('div'); row.style.cssText='display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid #eef0f4;';
+    const cur=c.id===currentClientId;
+    row.innerHTML=`<input value="${escAttr(c.name)}" data-cid="${c.id}" style="flex:1; padding:7px 9px; border:1px solid #dce1e9; border-radius:7px; font-size:13px;">`
+      +(cur?'<span style="font-size:11px; color:#15924f; white-space:nowrap;">使用中</span>':`<button class="ghost" data-use="${c.id}" style="padding:5px 10px; font-size:12px;">使う</button>`)
+      +`<button class="ghost" data-del="${c.id}" style="padding:5px 9px; font-size:12px; color:#e24b4a;">削除</button>`;
+    box.appendChild(row);
+  });
+  box.querySelectorAll('input[data-cid]').forEach(inp=>{ inp.onchange=()=> renameClient(inp.dataset.cid, inp.value.trim()||clientName(inp.dataset.cid)); });
+  box.querySelectorAll('button[data-use]').forEach(b=>{ b.onclick=()=>{ switchClient(b.dataset.use); renderClientList(); }; });
+  box.querySelectorAll('button[data-del]').forEach(b=>{ b.onclick=()=> deleteClient(b.dataset.del); });
+}
+function openClientMgmt(){ populateCopyFrom(); renderClientList(); $('clientModal').style.display='flex'; }
+if($('clientSel')){
+  $('clientSel').onchange=()=> switchClient($('clientSel').value);
+  $('clientMgmtBtn').onclick=openClientMgmt;
+  $('addClientBtn').onclick=addClient;
+  $('clientClose').onclick=()=>{ $('clientModal').style.display='none'; };
+  $('clientModal').addEventListener('click', e=>{ if(e.target.id==='clientModal') $('clientModal').style.display='none'; });
+  populateClientSel();
+}
 ['year','counter','taxd'].forEach(id=>{ const e=$(id); if(e) e.addEventListener('input', persist); });   // ヘッダ設定も自動保存
 if(_restored) setTimeout(()=>toast('前回の入力を復元しました（「表をクリア」で消去）', 5000), 300);
 
