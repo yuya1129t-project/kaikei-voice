@@ -54,9 +54,12 @@
   .seq{display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1;justify-content:flex-end}
   .seq .s{font-size:12px;color:var(--ink3);background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px 11px;white-space:nowrap}
   .seq .s.done{opacity:.5} .seq .s.now{color:#fff;background:var(--rec);border-color:var(--rec);font-weight:600}
-  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:14px}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:14px;table-layout:fixed}
+  td input{text-overflow:ellipsis}
   th,td{border-bottom:1px solid var(--line);padding:3px 4px;text-align:left}
-  thead th{border-bottom:1px solid var(--line2);font-size:11px;font-weight:600;color:var(--ink3);padding:7px 6px;background:#fafbfd}
+  thead th{border-bottom:1px solid var(--line2);font-size:11px;font-weight:600;color:var(--ink3);padding:7px 6px;background:#fafbfd;position:relative;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .colres{position:absolute;top:0;right:0;width:7px;height:100%;cursor:col-resize;z-index:3;user-select:none}
+  .colres:hover{background:var(--brand)}
   td input{width:100%;border:1px solid transparent;border-radius:6px;padding:7px 6px;font-size:13px;background:transparent;color:var(--ink);font-family:inherit}
   td input:hover{background:#f6f8fb} td input:focus{outline:none;background:#fff;box-shadow:inset 0 0 0 2px var(--brand)}
   #tbody td.cellactive{background:#f0f4ff}
@@ -139,9 +142,12 @@
       <span><label>既定税区分</label><input id="taxd" list="dl-tax" value="課対仕入内10%適格"></span>
     </div>
     <table id="tbl">
+      <colgroup>
+        <col style="width:26px"><col style="width:108px"><col style="width:126px"><col style="width:112px"><col style="width:98px"><col><col style="width:164px"><col style="width:98px"><col style="width:24px">
+      </colgroup>
       <thead><tr>
-        <th style="width:24px">#</th><th style="width:108px">日付</th><th style="width:126px">店舗</th><th style="width:112px">勘定科目</th>
-        <th style="width:98px">補助科目</th><th style="min-width:150px">摘要</th><th style="width:164px">税区分</th><th style="width:98px;text-align:right">金額</th><th style="width:22px"></th>
+        <th>#</th><th>日付</th><th>店舗</th><th>勘定科目</th>
+        <th>補助科目</th><th>摘要</th><th>税区分</th><th style="text-align:right">金額</th><th></th>
       </tr></thead>
       <tbody id="tbody"></tbody>
     </table>
@@ -897,10 +903,39 @@ if($('excelBtn')) $('excelBtn').onclick = ()=>{
   download('﻿'+[head,...body].join('\r\n'), 'excel_local.csv', 'text/csv');
 };
 
+// ───────── 列幅のドラッグ調整（端末に保存・顧客に依らない表示設定） ─────────
+const COLW_KEY='kv_colw', COLW_DEF=[26,108,126,112,98,0,164,98,24];   // 5=摘要は自動
+function applyColW(){
+  let w=null; try{ w=JSON.parse(localStorage.getItem(COLW_KEY)||'null'); }catch(_){}
+  if(!Array.isArray(w)) return;
+  document.querySelectorAll('#tbl colgroup col').forEach((c,i)=>{ if(typeof w[i]==='number' && w[i]>0) c.style.width=w[i]+'px'; });
+}
+function saveColW(){
+  const w=Array.from(document.querySelectorAll('#tbl colgroup col')).map((c,i)=> i===5 ? 0 : Math.round(c.getBoundingClientRect().width));
+  try{ localStorage.setItem(COLW_KEY, JSON.stringify(w)); }catch(_){}
+}
+function resetColW(){ try{ localStorage.removeItem(COLW_KEY); }catch(_){}
+  document.querySelectorAll('#tbl colgroup col').forEach((c,i)=>{ c.style.width = COLW_DEF[i]>0 ? COLW_DEF[i]+'px' : ''; }); }
+function setupColResize(){
+  const ths=document.querySelectorAll('#tbl thead th'), cols=document.querySelectorAll('#tbl colgroup col');
+  [1,2,3,4,5,6,7].forEach(i=>{   // #(0) と ×(8) 以外をリサイズ可
+    const th=ths[i]; if(!th || th.querySelector('.colres')) return;
+    const h=document.createElement('div'); h.className='colres'; h.title='ドラッグで列幅を調整（ダブルクリックで既定に戻す）'; th.appendChild(h);
+    h.addEventListener('mousedown', e=>{
+      e.preventDefault(); const x0=e.clientX, w0=cols[i].getBoundingClientRect().width;
+      const mv=ev=>{ cols[i].style.width=Math.max(48, Math.round(w0+(ev.clientX-x0)))+'px'; };
+      const up=()=>{ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); saveColW(); };
+      document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+    });
+    h.addEventListener('dblclick', ()=>{ resetColW(); saveColW(); });
+  });
+}
+
 const _restored = restoreState();          // 前回の入力があれば復元
 if(!rows.length) rows=[emptyRow()];        // 無ければ空1行
 refreshExporterUI();                       // 出力先に応じて税区分候補・ボタン名・注意書きを設定
 render();
+applyColW(); setupColResize();             // 列幅の復元＋ドラッグ調整を有効化
 ['year','counter','taxd'].forEach(id=>{ const e=$(id); if(e) e.addEventListener('input', persist); });   // ヘッダ設定も自動保存
 if(_restored) setTimeout(()=>toast('前回の入力を復元しました（「表をクリア」で消去）', 5000), 300);
 
