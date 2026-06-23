@@ -7,41 +7,71 @@
 <!-- Shift_JIS 変換用（弥生はShift_JISを要求するため） -->
 <script src="./vendor/encoding.min.js"></script>
 <style>
-  :root { font-family: "Hiragino Sans", "Yu Gothic", system-ui, sans-serif; }
-  body { margin: 0; background: #f4f6f9; color: #1c2530; }
-  header { background: #1f6feb; color: #fff; padding: 14px 20px; }
-  header h1 { margin: 0; font-size: 18px; }
-  header p { margin: 4px 0 0; font-size: 12px; opacity: .9; }
-  main { max-width: 1000px; margin: 0 auto; padding: 20px; }
-  .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 16px;
-          box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  .card h2 { margin: 0 0 10px; font-size: 14px; color: #34404d; }
-  textarea { width: 100%; box-sizing: border-box; height: 70px; font-size: 16px;
-             padding: 10px; border: 1px solid #cdd5df; border-radius: 8px; resize: vertical; }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
-  button { font-size: 14px; padding: 9px 16px; border: 0; border-radius: 8px; cursor: pointer; }
-  .primary { background: #1f6feb; color: #fff; }
-  .mic { background: #e8484c; color: #fff; }
-  .mic.on { background: #b3262a; animation: pulse 1s infinite; }
-  .ghost { background: #eef1f5; color: #34404d; }
-  .green { background: #1f9d57; color: #fff; }
-  @keyframes pulse { 50% { opacity: .6; } }
-  .settings label { font-size: 12px; color: #5a6675; margin-right: 4px; }
-  .settings input { padding: 6px 8px; border: 1px solid #cdd5df; border-radius: 6px; width: 90px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { border: 1px solid #e3e8ef; padding: 4px; text-align: left; }
-  th { background: #f0f3f7; font-size: 12px; color: #5a6675; }
-  td input { width: 100%; box-sizing: border-box; border: 1px solid transparent; border-radius: 4px;
-             padding: 6px 4px; font-size: 13px; background: transparent; }
-  td input:hover { border-color: #dbe2ea; background: #fafbfc; }       /* 編集できると分かるように */
-  td input:focus { background: #fff7d6; border-color: #f0c000; outline: none; }
-  tr.bad td { background: #fdeced; }
-  tr.grp td:first-child { box-shadow: inset 3px 0 0 #1f6feb; }   /* 複合仕訳のまとまり */
-  .amt input { text-align: right; }
-  .del { color: #e8484c; cursor: pointer; text-align: center; font-weight: bold; }
-  .hint { font-size: 12px; color: #7a8694; margin-top: 6px; line-height: 1.6; }
-  .pill { display: inline-block; background: #eef4ff; color: #1f6feb; border-radius: 999px;
-          padding: 2px 10px; font-size: 11px; margin-right: 6px; }
+  :root{
+    --bg:#f5f7fa; --surface:#fff; --line:#e7eaf0; --line2:#dce1e9;
+    --ink:#1b2430; --ink2:#5c6776; --ink3:#9aa4b2;
+    --brand:#3a5bd9; --brand-soft:#eef2fe;
+    --rec:#e24b4a; --rec-bg:#fdeceb; --ok:#15924f; --grp:#c98a2b;
+    font-family:"Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-size:14px;-webkit-font-smoothing:antialiased}
+  .appbar{display:flex;align-items:center;gap:10px;background:var(--surface);border-bottom:1px solid var(--line);padding:10px 22px}
+  .appbar .logo{width:30px;height:30px;border-radius:8px;background:var(--brand-soft);display:flex;align-items:center;justify-content:center;font-size:15px}
+  .appbar h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.2px}
+  .appbar .sub{font-size:12px;color:var(--ink3)}
+  .saved{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ok);transition:opacity .3s}
+  .saved .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+  main{max-width:1040px;margin:0 auto;padding:18px 22px 64px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px}
+  .card-h{display:flex;align-items:center;gap:8px;margin:0 0 13px}
+  .card-h .n{width:20px;height:20px;border-radius:6px;background:var(--brand-soft);color:var(--brand);font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center}
+  .card-h h2{margin:0;font-size:14px;font-weight:600}
+  .card-h .muted{font-size:12px;color:var(--ink3);font-weight:400}
+  .toolbar,.out-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  button{font-size:13px;font-weight:500;padding:9px 15px;border:1px solid transparent;border-radius:8px;cursor:pointer;font-family:inherit;transition:filter .12s}
+  button:hover{filter:brightness(.97)} button:active{transform:translateY(.5px)}
+  .mic{background:var(--brand);color:#fff;display:inline-flex;align-items:center;gap:7px}
+  .mic.on{background:var(--rec)}
+  .ghost{background:#f1f3f7;color:var(--ink2);border-color:var(--line)}
+  .green{background:var(--ok);color:#fff}
+  .lvl{display:inline-flex;align-items:flex-end;gap:2px;height:18px;opacity:0;transition:opacity .2s}
+  .lvl.on{opacity:1}
+  .lvl span{width:3px;background:var(--rec);border-radius:2px;height:4px;transition:height .07s linear}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:12px}
+  .chip{font-size:12px;color:var(--ink2);background:#f3f5f9;border:1px solid var(--line);border-radius:999px;padding:4px 11px}
+  .chip b{color:var(--ink);font-weight:600}
+  .settings{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:13px}
+  .settings span{display:inline-flex;align-items:center;gap:6px}
+  .settings label{font-size:12px;color:var(--ink2)}
+  .settings input,select,#taxd{padding:7px 9px;border:1px solid var(--line2);border-radius:7px;font-size:13px;background:#fff;color:var(--ink);font-family:inherit}
+  #year{width:74px} #counter{width:78px} #taxd{width:166px} select{cursor:pointer}
+  .hud{display:none;align-items:center;gap:12px;background:var(--rec-bg);border:1px solid #f4cdca;border-radius:10px;padding:9px 13px;margin-top:13px}
+  .hud.on{display:flex}
+  .hud .badge{display:inline-flex;align-items:center;gap:6px;color:#fff;background:var(--rec);border-radius:999px;padding:5px 12px;font-size:12px;font-weight:600;white-space:nowrap}
+  .hud .badge .d{width:8px;height:8px;border-radius:50%;background:#fff;animation:blink 1s infinite}
+  @keyframes blink{50%{opacity:.35}}
+  .seq{display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1;justify-content:flex-end}
+  .seq .s{font-size:12px;color:var(--ink3);background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px 11px;white-space:nowrap}
+  .seq .s.done{opacity:.5} .seq .s.now{color:#fff;background:var(--rec);border-color:var(--rec);font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:14px}
+  th,td{border-bottom:1px solid var(--line);padding:3px 4px;text-align:left}
+  thead th{border-bottom:1px solid var(--line2);font-size:11px;font-weight:600;color:var(--ink3);padding:7px 6px;background:#fafbfd}
+  td input{width:100%;border:1px solid transparent;border-radius:6px;padding:7px 6px;font-size:13px;background:transparent;color:var(--ink);font-family:inherit}
+  td input:hover{background:#f6f8fb} td input:focus{outline:none;background:#fff;box-shadow:inset 0 0 0 2px var(--brand)}
+  #tbody td.cellactive{background:#f0f4ff}
+  #tbl.rec td.cellactive input{box-shadow:inset 0 0 0 2px var(--rec);background:var(--rec-bg)}
+  tr.bad td{background:#fdf1f1}
+  .amt input{text-align:right;font-variant-numeric:tabular-nums}
+  .del{color:var(--ink3);cursor:pointer;text-align:center} .del:hover{color:var(--rec)}
+  .lnk{cursor:pointer;font-size:11px;line-height:1;opacity:.35;margin-top:2px;user-select:none}
+  .lnk:hover{opacity:.8} .lnk.on{opacity:1}
+  #tbody tr.grp td{background:#fdf8ee}
+  #tbody tr.grp td:first-child{box-shadow:inset 3px 0 0 var(--grp)}
+  #tbody tr.grp.bad td{background:#fdf1f1}
+  .footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:12px;padding-top:11px;border-top:1px solid var(--line)}
+  .summary{font-size:13px;color:var(--ink2)} .summary b{color:var(--ink);font-weight:600}
+  .hint{font-size:12px;color:var(--ink3);line-height:1.6;margin:10px 0 0}
 </style>
 </head>
 <body>
@@ -74,64 +104,65 @@
   </div>
   <div id="dlPct" style="font-size:11px; text-align:right; margin-top:5px; opacity:.85;">0%</div>
 </div>
-<header>
-  <h1>🎙️ 音声入力 → 弥生CSV（小口現金・お試し版）</h1>
-  <p>言ったことだけを構造化します。勘定科目の自動推測はしません。<span id="appVer" style="margin-left:10px; opacity:.7; font-size:11px;"></span></p>
-</header>
+<div class="appbar">
+  <span class="logo">🎤</span>
+  <h1>KaikeiVoice</h1>
+  <span class="sub">小口現金を声で入力 → 会計ソフトへ</span>
+  <span style="flex:1"></span>
+  <span class="saved" id="savedInd" style="opacity:0"><span class="dot"></span>自動保存しました</span>
+  <span class="sub" id="appVer"></span>
+</div>
 
 <main>
   <div class="card">
-    <h2>① 入力（表に直接 — 音声でも手入力でも）</h2>
-    <style>
-      #tbl input:focus{ outline:2px solid #2f6fed; outline-offset:-2px; background:#f5f9ff; border-radius:4px; }
-      #tbody td.cellactive{ background:#eef4ff; }
-      #tbl.rec td.cellactive{ box-shadow: inset 0 0 0 2px #e8484c; background:#fdecec; }   /* 録音中の対象セル（赤枠） */
-      .lnk{ cursor:pointer; font-size:11px; line-height:1; opacity:.3; margin-top:2px; user-select:none; }
-      .lnk:hover{ opacity:.75; }
-      .lnk.on{ opacity:1; }
-      #tbody tr.grp td{ background:#fbf7ee; }                                    /* 複合（同じ伝票）の行 */
-      #tbody tr.grp td:first-child{ box-shadow: inset 3px 0 0 #d9a441; }
-      #tbody tr.grp.bad td{ background:#fdeced; }                                /* 複合でも未入力なら赤で警告（隠さない） */
-    </style>
-    <div class="row" style="margin-bottom:10px">
+    <div class="card-h"><span class="n">1</span><h2>入力</h2><span class="muted">表に直接 — 音声でも手入力でも</span></div>
+    <div class="toolbar">
       <button class="mic" id="micBtn">🎤 音声入力（Space）</button>
-      <button class="ghost" id="sampleBtn">サンプルを入れる</button>
+      <div class="lvl" id="micLevel" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+      <span style="flex:1"></span>
+      <button class="ghost" id="sampleBtn">サンプル</button>
       <button class="ghost" id="masterBtn">⚙ マスタ編集</button>
     </div>
-    <div class="settings row">
+    <div class="hud" id="recHud">
+      <span class="badge"><span class="d"></span>録音中</span>
+      <div class="seq" id="recSeq"></div>
+    </div>
+    <div class="chips">
+      <span class="chip"><b>→</b> 話して次のセルへ</span>
+      <span class="chip">「<b>複合</b>」で同じ伝票（振替）</span>
+      <span class="chip">「<b>削除</b>」でセルを消去</span>
+      <span class="chip"><b>Space</b> で停止</span>
+    </div>
+    <div class="settings">
       <span><label>年</label><input id="year" type="number" value="2026"></span>
       <span><label>相手科目</label><input id="counter" value="現金"></span>
-      <span><label>既定税区分(借方)</label><input id="taxd" value="課対仕入内10%適格"></span>
+      <span><label>既定税区分</label><input id="taxd" list="dl-tax" value="課対仕入内10%適格"></span>
     </div>
     <table id="tbl">
-      <thead>
-        <tr>
-          <th style="width:26px">#</th><th style="width:84px">日付</th><th style="width:100px">店舗</th><th style="width:105px">勘定科目</th>
-          <th style="width:95px">補助科目</th><th>摘要</th><th style="width:118px">税区分</th>
-          <th style="width:80px">金額</th><th style="width:22px"></th>
-        </tr>
-      </thead>
+      <thead><tr>
+        <th style="width:24px">#</th><th style="width:84px">日付</th><th style="width:104px">店舗</th><th style="width:104px">勘定科目</th>
+        <th style="width:96px">補助科目</th><th>摘要</th><th style="width:122px">税区分</th><th style="width:84px;text-align:right">金額</th><th style="width:22px"></th>
+      </tr></thead>
       <tbody id="tbody"></tbody>
     </table>
-    <datalist id="dl-acc"></datalist>
-    <datalist id="dl-tax"></datalist>
-    <p class="hint">
-      <b>🎤 音声入力</b>を押すと空行の<b>日付セルが録音先</b>（赤枠）。<b>そのセルの値だけ</b>を話し、<b>十字キー（→）で次のセルへ移動</b>すると、いま話した内容がそのセルに入り、移動先がすぐ録音先になります。例：「<b>6月15日</b>」→<b>→</b>→「<b>セブンイレブン</b>」→<b>→</b>→「<b>消耗品費</b>」→…。最後に<b>停止（Space）</b>でそのセルを確定。<br>
-      型ごとに自動補正：日付・金額＝<b>数字</b>、店舗・勘定科目・補助科目＝<b>一覧から最も近いものへ吸着</b>、残りは摘要。録音中の<b>クリックでも録音先が切替</b>。各セルは<b>キーボードで直接修正</b>もでき、勘定科目・税区分は<b>クリックでプルダウン</b>。行が埋まると次の空行が自動追加。相手科目（現金）と貸方は出力時に自動補完します。</p>
+    <datalist id="dl-acc"></datalist><datalist id="dl-tax"></datalist>
+    <div class="footer">
+      <span class="summary" id="rowSummary">—</span>
+      <span class="hint" style="margin:0">勘定科目・税区分はクリックでプルダウン／行が埋まると自動で次の行</span>
+    </div>
   </div>
 
   <div class="card">
-    <h2>② 出力</h2>
-    <div class="row">
-      <button class="green" id="yayoiBtn">弥生取込ファイル（.txt / Shift_JIS）</button>
-      <button class="ghost" id="excelBtn">Excel用CSV（UTF-8）</button>
+    <div class="card-h"><span class="n">2</span><h2>出力</h2></div>
+    <div class="out-row">
+      <label style="font-size:12px;color:var(--ink2)">出力先</label>
+      <select id="exporterSel"></select>
+      <button class="green" id="exportBtn"><span id="exportBtnLabel">弥生取込ファイルを書き出し</span></button>
+      <button class="ghost" id="excelBtn">Excel用CSV</button>
       <button class="ghost" id="clearBtn">表をクリア</button>
       <button class="ghost" id="updBtn" style="display:none">⬆️ アップデート確認</button>
     </div>
-    <p class="hint">
-      弥生CSVは<b>先生の実エクスポートと同じ形式</b>（25列・和暦・Shift_JIS・インボイス税区分）で出力します。<br>
-      ⚠️ 税区分は「課対仕入内10%適格」を既定に。軽減8%や売上の税区分文字列は仮なので、実データが出たら合わせ込みます。
-    </p>
+    <p class="hint" id="exportHint"></p>
   </div>
 </main>
 
@@ -353,7 +384,28 @@ function cellInputEl(r,c){ return document.querySelector(`#tbody input[data-i="$
 function highlightCell(){
   document.querySelectorAll('#tbody td.cellactive').forEach(td=>td.classList.remove('cellactive'));
   const el=cellInputEl(activeR,activeC); if(el&&el.parentElement) el.parentElement.classList.add('cellactive');
+  renderRecSeq();
 }
+// ───────── 新UI：録音ガイド・音量メーター・合計・自動保存表示 ─────────
+const COL_LABELS={date:'日付',vendor:'店舗',account:'勘定科目',sub:'補助科目',memo:'摘要',tax:'税区分',amount:'金額'};
+function renderRecSeq(){
+  const hud=$('recHud'), seq=$('recSeq'); if(!hud||!seq) return;
+  if(!recording){ hud.classList.remove('on'); return; }
+  hud.classList.add('on');
+  seq.innerHTML = EDCOLS.map((k,i)=>{ const cls = i<activeC?'s done' : i===activeC?'s now' : 's'; return `<span class="${cls}">${COL_LABELS[k]}</span>`; }).join('');
+}
+function updateTotals(){
+  const el=$('rowSummary'); if(!el) return;
+  const data=rows.filter(r=>!isRowEmpty(r));
+  const total=data.reduce((s,r)=> s + (parseInt(r.amount,10)||0), 0);
+  el.innerHTML = data.length ? `${data.length}件　合計 <b>¥${total.toLocaleString()}</b>` : '行を追加してください（音声入力 or 直接入力）';
+}
+function setMicLevel(p){
+  const m=$('micLevel'); if(!m) return;
+  const lvl=Math.min(1, p*7), hs=[0.5,0.8,1,0.8,0.5];
+  for(let i=0;i<m.children.length;i++){ m.children[i].style.height = (4 + lvl*hs[i]*14).toFixed(1)+'px'; }
+}
+function flashSaved(){ const s=$('savedInd'); if(!s) return; s.style.opacity='1'; clearTimeout(window.__savedT); window.__savedT=setTimeout(()=>{ s.style.opacity='0'; }, 1200); }
 function focusCell(r,c){
   activeR=Math.max(0,Math.min(rows.length-1,r)); activeC=Math.max(0,Math.min(EDCOLS.length-1,c));
   const el=cellInputEl(activeR,activeC); if(el){ el.focus(); try{ el.select(); }catch(_){} }
@@ -399,10 +451,12 @@ function commitSeg(tR,tC,s,e){
   if(peak < 0.05 || voicedMs < 180) return;                 // ピーク小 or 発話が合計180ms未満＝雑音とみなしスキップ
   const k=EDCOLS[tC];
   window.__TAURI__.core.invoke('transcribe_reazon',{ samples:Array.from(seg), sampleRate:recRate })
-    .then(txt=>{ txt=_clean(txt); if(!txt) return;
+    .then(res=>{ let txt='', conf=0; try{ const o=JSON.parse(res); txt=o.t||''; conf=(typeof o.c==='number')?o.c:0; }catch(_){ txt=res||''; }
+      txt=_clean(txt); if(!txt) return;
       if(DELCMD.test(txt)){ clearCell(tR,k); return; }
       if(GRPCMD.test(txt)){ toggleGroup(tR); return; }
       if([...txt].length <= 1 && !/[0-9０-９]/.test(txt)) return;   // 1文字（数字以外）＝ノイズの幻聴とみなし破棄
+      if([...txt].length <= 3 && !/[0-9０-９]/.test(txt) && conf < -0.7) return;   // 短文かつ低自信度＝雑音の幻聴とみなし破棄（音量に依存しない二段目）
       fillCell(tR,k,txt); })
     .catch(e=>{ toast('認識できませんでした: '+e, 8000); });   // 実際の失敗（サイドカー接続不可など）だけ表示
 }
@@ -477,7 +531,7 @@ let rows = [];
 let voiceInterim = '';   // （未使用・後方互換）
 let groupSeq = 0;        // 複合仕訳のグループID採番
 const $ = id => document.getElementById(id);
-function rowClass(r){ const bad = !r.account || r.amount==='' || (!r.date && r.group==null); return [bad?'bad':'', r.group?'grp':''].filter(Boolean).join(' '); }   // 複合の続き行は日付未入力でもOK
+function rowClass(r){ const bad = !isRowEmpty(r) && (!r.account || r.amount==='' || (!r.date && r.group==null)); return [bad?'bad':'', r.group?'grp':''].filter(Boolean).join(' '); }   // 空行は警告色にしない。複合の続き行は日付未入力でもOK
 function escAttr(v){ return String(v==null?'':v).replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 function cellInput(e){
   const i=+e.target.dataset.i, k=e.target.dataset.k;
@@ -526,7 +580,7 @@ function persist(){
   if(_persistT) clearTimeout(_persistT);
   _persistT=setTimeout(()=>{ try{ localStorage.setItem('kv_state', JSON.stringify({
     rows, groupSeq, year:$('year').value, counter:$('counter').value, taxd:$('taxd').value
-  })); }catch(_){} }, 400);   // 連打を400msデバウンス
+  })); flashSaved(); }catch(_){} }, 400);   // 連打を400msデバウンス
 }
 function restoreState(){
   let st=null; try{ st=JSON.parse(localStorage.getItem('kv_state')||'null'); }catch(_){ st=null; }
@@ -543,7 +597,7 @@ function restoreState(){
 function render(){
   const tb = $('tbody'); tb.innerHTML='';
   rows.forEach((r,i)=> tb.appendChild(rowTr(i)));
-  persist();
+  updateTotals(); persist();
 }
 
 // ───────── ボタン群 ─────────
@@ -601,16 +655,18 @@ async function whisperStart(){
   const src = recCtx.createMediaStreamSource(recStream);
   recProc = recCtx.createScriptProcessor(4096,1,1);
   recBufs=[]; segStart=0;
-  recProc.onaudioprocess = (e)=>{ recBufs.push(new Float32Array(e.inputBuffer.getChannelData(0))); };   // 貯めるだけ（区切りは十字キー/クリック/停止）
+  recProc.onaudioprocess = (e)=>{ const ch=e.inputBuffer.getChannelData(0); recBufs.push(new Float32Array(ch)); let p=0; for(let n=0;n<ch.length;n+=8){ const a=ch[n]<0?-ch[n]:ch[n]; if(a>p)p=a; } setMicLevel(p); };   // 貯める＋音量メーター更新
   src.connect(recProc); recProc.connect(recCtx.destination);
   if(activeR>=rows.length) activeR=draftIndex();              // 未選択なら下書き行の日付へ
   render(); highlightCell(); $('tbl').classList.add('rec');
   if(document.activeElement && document.activeElement.blur) document.activeElement.blur();  // 十字キーで移動／Spaceで停止
   recording=true; micBtn.classList.add('on'); micBtn.textContent='🔴 録音中… セルに話す→十字キーで次（停止）';
+  $('micLevel').classList.add('on'); renderRecSeq();   // 音量メーター＋録音ガイド表示
 }
 async function whisperStop(){
   if(!recording) return; recording=false;
   $('tbl').classList.remove('rec'); micBtn.classList.remove('on'); micBtn.textContent='🎤 音声入力（Space）';
+  $('recHud').classList.remove('on'); $('micLevel').classList.remove('on'); setMicLevel(0);   // 録音ガイド＋メーターを戻す
   const e=_count(), tR=activeR, tC=activeC, s=segStart;
   try{ recProc.disconnect(); }catch(_){}
   try{ recStream.getTracks().forEach(t=>t.stop()); }catch(_){}
@@ -685,14 +741,13 @@ $('tbody').addEventListener('mousedown', e=>{
   if(inp){ e.preventDefault(); goCell(+inp.dataset.i, EDCOLS.indexOf(inp.dataset.k)); }
 }, true);
 // マウスでボタンを押した後はフォーカスを外し、Spaceショートカットを安定させる
-['micBtn','sampleBtn','yayoiBtn','excelBtn','clearBtn'].forEach(id=>{
+['micBtn','sampleBtn','exportBtn','excelBtn','clearBtn'].forEach(id=>{
   const b=$(id); if(b) b.addEventListener('click', ()=> b.blur());
 });
 
-// 勘定科目・税区分の候補（修正時にプルダウンから選べる）
-function fillDatalist(id, items){ $(id).innerHTML = items.map(v=>`<option value="${v}">`).join(''); }
+// 勘定科目の候補（修正時にプルダウンから選べる）。税区分は出力先エクスポータから供給
+function fillDatalist(id, items){ const el=$(id); if(el) el.innerHTML = items.map(v=>`<option value="${v}">`).join(''); }
 fillDatalist('dl-acc', ACCOUNTS);
-fillDatalist('dl-tax', ['課対仕入内10%適格','課対仕入内8%適格','対象外','課税売上内10%適格','課税売上内8%適格','非課仕入','非課売上']);
 
 // ───────── マスタ編集（画面から追加・削除。端末に保存） ─────────
 function _lines(t){ return (t||'').split('\n').map(s=>s.trim()).filter(Boolean); }
@@ -763,48 +818,78 @@ function yayoiRow(flag, denpyo, dateW, dAcc, dSub, dTax, dAmt, dTaxAmt, cAcc, cT
     q(cAcc), q(""), q(""), q(cTax), cAmt, 0, q(tekiyo||""), q(""), q(""), type, q(""), q(""), q("0"), q("0"), q("no") ].join(',');
 }
 
-// 弥生インポート形式（25列・ヘッダ無し・Shift_JIS・CRLF）— 実エクスポートに一致
-$('yayoiBtn').onclick = ()=>{
+// ───────── 出力先サービス（差し替え式エクスポータ）。中立の表データ→各社の取込形式 ─────────
+// 今は弥生のみ実装。freee / マネーフォワード / 勘定奉行 / 汎用CSV は ready:false（順次対応）。
+const EXPORTERS = {
+  yayoi: {
+    id:'yayoi', name:'弥生会計', ready:true, btnLabel:'弥生取込ファイルを書き出し',
+    hint:'弥生の実エクスポートと同じ形式（25列・和暦・Shift_JIS・インボイス税区分）で出力します。',
+    taxOptions:['課対仕入内10%適格','課対仕入内8%適格','対象外','課税売上内10%適格','課税売上内8%適格','非課仕入','非課売上'],
+    defaultTax:'課対仕入内10%適格',
+    // 弥生インポート形式（25列・ヘッダ無し・Shift_JIS・CRLF）— 実エクスポートに一致
+    build(data, opt){
+      data.forEach(r=>{ const dd=extractDate(r.date,opt.year); if(dd.date) r.date=dd.date; });
+      const counter=opt.counter, taxd=opt.taxd;
+      const groups=[]; const byId={};
+      data.forEach(r=>{ if(r.group==null){ groups.push([r]); } else { if(!byId[r.group]){ byId[r.group]=[]; groups.push(byId[r.group]); } byId[r.group].push(r); } });
+      const lines=[]; let denpyo=0;
+      for(const g of groups){
+        denpyo++;
+        if(g.length===1){
+          const r=g[0], tax=r.tax||taxd, amt=parseInt(r.amount,10)||0;
+          const tekiyo=[r.memo, r.vendor].filter(Boolean).join(' ');
+          lines.push(yayoiRow("2000", denpyo, wareki(r.date), r.account, r.sub, tax, amt, taxAmount(amt,tax), counter, "対象外", amt, 0, tekiyo));
+        } else {
+          const total=g.reduce((s,r)=> s + (parseInt(r.amount,10)||0), 0);
+          g.forEach((r,idx)=>{ const tax=r.tax||taxd, amt=parseInt(r.amount,10)||0;
+            lines.push(yayoiRow(idx===0?"2110":"2100", denpyo, wareki(g[0].date), r.account, r.sub, tax, amt, taxAmount(amt,tax), "", "対象外", 0, 3, r.memo||"")); });
+          lines.push(yayoiRow("2101", denpyo, wareki(g[0].date), "", "", "対象外", 0, 0, counter, "対象外", total, 3, g[0].vendor||""));
+        }
+      }
+      const text=lines.join('\r\n')+'\r\n';
+      if(window.Encoding){ return { bytes:new Uint8Array(Encoding.convert(text,{to:'SJIS',from:'UNICODE',type:'array'})), filename:'yayoi_import.txt', mime:'text/plain' }; }
+      return { text:'﻿'+text, filename:'yayoi_import_utf8.txt', mime:'text/plain', warn:'Shift_JIS変換ライブラリが読めませんでした（オフライン？）。UTF-8で出力します。' };
+    }
+  },
+  freee:   { id:'freee',   name:'freee',           ready:false },
+  mf:      { id:'mf',      name:'マネーフォワード', ready:false },
+  obc:     { id:'obc',     name:'勘定奉行',         ready:false },
+  generic: { id:'generic', name:'汎用CSV',          ready:false },
+};
+let exporterId = 'yayoi';
+try{ const sv=localStorage.getItem('kv_exporter'); if(sv && EXPORTERS[sv] && EXPORTERS[sv].ready) exporterId=sv; }catch(_){}
+function curExporter(){ const e=EXPORTERS[exporterId]; return (e&&e.ready)?e:EXPORTERS.yayoi; }
+function refreshExporterUI(){
+  const ex=curExporter();
+  const lbl=$('exportBtnLabel'); if(lbl) lbl.textContent=ex.btnLabel||(ex.name+'へ書き出し');
+  const h=$('exportHint'); if(h) h.textContent=ex.hint||'';
+  if(ex.taxOptions) fillDatalist('dl-tax', ex.taxOptions);
+}
+function runExport(){
   const data = rows.filter(r=>!isRowEmpty(r));   // 末尾の空行などは除外
   if(!data.length) return alert('表が空です');
-  data.forEach(r=>{ const dd=extractDate(r.date,$('year').value); if(dd.date) r.date=dd.date; });   // 「6/15」等を正規化
-  const counter = $('counter').value, taxd = $('taxd').value;
-  // グループ単位にまとめる（group=null は単独仕訳）
-  const groups = []; const byId = {};
-  data.forEach(r=>{
-    if(r.group==null){ groups.push([r]); }
-    else { if(!byId[r.group]){ byId[r.group]=[]; groups.push(byId[r.group]); } byId[r.group].push(r); }
-  });
-  const lines = []; let denpyo = 0;
-  for(const g of groups){
-    denpyo++;
-    if(g.length===1){
-      // 単一仕訳（2000）：借方＝費用／貸方＝現金 を同一行に。摘要＝品目＋店舗
-      const r=g[0], tax=r.tax||taxd, amt=parseInt(r.amount,10)||0;
-      const tekiyo=[r.memo, r.vendor].filter(Boolean).join(' ');
-      lines.push(yayoiRow("2000", denpyo, wareki(r.date), r.account, r.sub, tax, amt, taxAmount(amt,tax), counter, "対象外", amt, 0, tekiyo));
-    } else {
-      // 複合仕訳（2110→2100→2101）：各借方行の摘要＝品目、現金行の摘要＝店舗
-      const total = g.reduce((s,r)=> s + (parseInt(r.amount,10)||0), 0);
-      g.forEach((r,idx)=>{
-        const tax=r.tax||taxd, amt=parseInt(r.amount,10)||0;
-        lines.push(yayoiRow(idx===0?"2110":"2100", denpyo, wareki(g[0].date), r.account, r.sub, tax, amt, taxAmount(amt,tax), "", "対象外", 0, 3, r.memo||""));   // 続き行も伝票日付（先頭行）を使う
-      });
-      lines.push(yayoiRow("2101", denpyo, wareki(g[0].date), "", "", "対象外", 0, 0, counter, "対象外", total, 3, g[0].vendor||""));
-    }
-  }
-  const text = lines.join('\r\n')+'\r\n';
-  if(window.Encoding){
-    const sjis = Encoding.convert(text, {to:'SJIS', from:'UNICODE', type:'array'});
-    download(new Uint8Array(sjis), 'yayoi_import.txt', 'text/plain');
-  } else {
-    alert('Shift_JIS変換ライブラリが読めませんでした（オフライン？）。UTF-8で出力します。');
-    download('﻿'+text, 'yayoi_import_utf8.txt', 'text/plain');
-  }
-};
+  const ex=curExporter();
+  const out=ex.build(data, { counter:$('counter').value, taxd:$('taxd').value, year:$('year').value });
+  if(out.warn) alert(out.warn);
+  download(out.bytes||out.text, out.filename, out.mime);
+}
+if($('exportBtn')) $('exportBtn').onclick = runExport;
+// 出力先セレクタ：実装済みサービスのみ切替可（未対応は近日対応の案内）
+(function initExporterSel(){
+  const sel=$('exporterSel'); if(!sel) return;
+  sel.innerHTML = Object.keys(EXPORTERS).map(k=>{ const e=EXPORTERS[k]; return `<option value="${k}">${e.name}${e.ready?'':'（近日対応）'}</option>`; }).join('');
+  sel.value = exporterId;
+  sel.onchange = ()=>{
+    const k=sel.value;
+    if(!EXPORTERS[k] || !EXPORTERS[k].ready){ toast(EXPORTERS[k]?.name+' は近日対応です（今は弥生のみ）', 4000); sel.value=exporterId; return; }
+    exporterId=k; try{ localStorage.setItem('kv_exporter', k); }catch(_){}
+    const td=$('taxd'); if(td && EXPORTERS[k].defaultTax) td.value=EXPORTERS[k].defaultTax;
+    refreshExporterUI();
+  };
+})();
 
-// Excel用（ヘッダ有り・UTF-8 BOM）
-$('excelBtn').onclick = ()=>{
+// Excel用CSV（ヘッダ有り・UTF-8 BOM）— サービス非依存の汎用エクスポート（確認・他用途向け）
+if($('excelBtn')) $('excelBtn').onclick = ()=>{
   const data = rows.filter(r=>!isRowEmpty(r));
   if(!data.length) return alert('表が空です');
   const head = ["日付","店舗","勘定科目","補助科目","摘要","税区分","金額"].map(q).join(',');
@@ -814,6 +899,7 @@ $('excelBtn').onclick = ()=>{
 
 const _restored = restoreState();          // 前回の入力があれば復元
 if(!rows.length) rows=[emptyRow()];        // 無ければ空1行
+refreshExporterUI();                       // 出力先に応じて税区分候補・ボタン名・注意書きを設定
 render();
 ['year','counter','taxd'].forEach(id=>{ const e=$(id); if(e) e.addEventListener('input', persist); });   // ヘッダ設定も自動保存
 if(_restored) setTimeout(()=>toast('前回の入力を復元しました（「表をクリア」で消去）', 5000), 300);

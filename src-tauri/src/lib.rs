@@ -512,11 +512,18 @@ fn reazon_log(srv: tauri::State<'_, ReazonSrv>) -> String {
 }
 
 // サーバー返却JSONから "text" を取り出す
-fn reazon_extract_text(s: &str) -> String {
+// サーバー返却JSONから (text, 自信度=ys_log_probsの平均) を取り出す。
+// 自信度が低い短文は雑音の幻聴の可能性が高いので、フロント側で破棄判定に使う。
+fn reazon_extract_text(s: &str) -> (String, f32) {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(s.trim()) {
-        if let Some(t) = v.get("text").and_then(|t| t.as_str()) { return t.replace(' ', ""); }
+        let text = v.get("text").and_then(|t| t.as_str()).map(|t| t.replace(' ', "")).unwrap_or_default();
+        let conf = v.get("ys_log_probs").and_then(|a| a.as_array()).map(|a| {
+            let vals: Vec<f64> = a.iter().filter_map(|x| x.as_f64()).collect();
+            if vals.is_empty() { 0.0 } else { (vals.iter().sum::<f64>() / vals.len() as f64) as f32 }
+        }).unwrap_or(0.0);
+        return (text, conf);
     }
-    String::new()
+    (String::new(), 0.0)
 }
 
 // 録音PCM(16kHz mono f32)を 常駐サーバーへWSで送って文字化（高速）
@@ -559,16 +566,18 @@ async fn transcribe_reazon(app: tauri::AppHandle, state: tauri::State<'_, Licens
     };
     ws.send(Message::Binary(payload)).await.map_err(|e| e.to_string())?;
     let mut result = String::new();
+    let mut conf = 0f32;
     while let Some(m) = ws.next().await {
         match m {
-            Ok(Message::Text(t)) => { result = reazon_extract_text(&t); break; }
+            Ok(Message::Text(t)) => { let (tx, c) = reazon_extract_text(&t); result = tx; conf = c; break; }
             Ok(Message::Close(_)) => break,
             Ok(_) => continue,
             Err(e) => return Err(e.to_string()),
         }
     }
     let _ = ws.close(None).await;
-    Ok(result)
+    // 文字＋自信度をJSONで返す（フロントが短文×低自信度を雑音として破棄できるように）
+    Ok(serde_json::json!({"t": result, "c": conf}).to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
