@@ -43,6 +43,27 @@ jobs:
       - name: Install npm deps
         run: npm install
 
+      # ReazonSpeech常駐サーバー（sherpa-onnx）をサイドカーとして取得（リポジトリ未収載のため毎回取得）
+      - name: Fetch ReazonSpeech server sidecar (macOS universal)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          curl -L --retry 5 -o sherpa.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/sherpa-onnx-v1.13.3-osx-universal2-static.tar.bz2
+          tar -xjf sherpa.tar.bz2
+          mkdir -p src-tauri/binaries
+          for t in aarch64-apple-darwin x86_64-apple-darwin universal-apple-darwin; do
+            cp sherpa-onnx-v1.13.3-osx-universal2-static/bin/sherpa-onnx-offline-websocket-server "src-tauri/binaries/sherpa-onnx-offline-websocket-server-$t"
+          done
+
+      - name: Fetch ReazonSpeech server sidecar (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/sherpa-onnx-v1.13.3-win-x64-static-MT-Release.tar.bz2"
+          Invoke-WebRequest -Uri $url -OutFile sherpa.tar.bz2
+          tar -xjf sherpa.tar.bz2
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item "sherpa-onnx-v1.13.3-win-x64-static-MT-Release/bin/sherpa-onnx-offline-websocket-server.exe" "src-tauri/binaries/sherpa-onnx-offline-websocket-server-x86_64-pc-windows-msvc.exe" -Force
+
       - name: Build + sign + publish release
         uses: tauri-apps/tauri-action@v0
         env:
