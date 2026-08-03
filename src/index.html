@@ -147,6 +147,7 @@
     <div class="settings">
       <span><label>年</label><input id="year" type="number" value="2026"></span>
       <span><label>相手科目</label><input id="counter" value="現金"></span>
+      <span><label>相手補助科目</label><input id="counterSub" value="" placeholder="例: 銀行名"></span>
       <span><label>既定税区分</label><input id="taxd" list="dl-tax" value="課対仕入内10%適格"></span>
     </div>
     <table id="tbl">
@@ -193,6 +194,15 @@
         <textarea id="m-subs" style="width:100%; box-sizing:border-box; height:170px; font-size:13px; padding:8px; border:1px solid #c9d2dc; border-radius:8px; resize:vertical;"></textarea></div>
       <div><label style="font-weight:600; font-size:13px; color:#243;">別名 → 正式名（例: えねおす=ENEOS）</label>
         <textarea id="m-aliases" style="width:100%; box-sizing:border-box; height:170px; font-size:13px; padding:8px; border:1px solid #c9d2dc; border-radius:8px; resize:vertical;"></textarea></div>
+      <div style="grid-column:1 / -1;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <label style="font-weight:600; font-size:13px; color:#243;">サーチキー数字（1行1件・例: 460 消耗品費）</label>
+          <span id="m-codes-count" style="font-size:12px; color:#5a6675;"></span>
+          <button class="ghost" id="m-codes-import" style="margin-left:auto; font-size:12px; padding:4px 10px;">弥生の科目表を取り込む</button>
+          <input type="file" id="m-codes-file" accept=".csv,.txt,text/csv,text/plain" style="display:none;">
+        </div>
+        <p style="color:#5a6675; font-size:11px; margin:4px 0 4px; line-height:1.5;">弥生の「科目設定」書き出しファイル（CSV/TXT・Shift_JIS可）を選ぶと自動で読み取ります。手元にテキストがある場合は、下の欄に直接貼り付けても構いません（1行に「コード 科目名」）。</p>
+        <textarea id="m-codes" style="width:100%; box-sizing:border-box; height:170px; font-size:13px; padding:8px; border:1px solid #c9d2dc; border-radius:8px; resize:vertical;"></textarea></div>
     </div>
     <div class="row" style="margin-top:16px; justify-content:flex-end; gap:8px;">
       <button class="ghost" id="m-reset">既定を読み込む</button>
@@ -226,7 +236,8 @@
 <script>
 // ───────── 顧客（顧問先）別の保存：localStorageを顧客IDで名前空間化。入力/マスタ/出力先を顧客ごとに独立 ─────────
 let clients=[], currentClientId='';
-function clientKey(base){ return base+'__'+currentClientId; }
+// 顧客IDが空＝顧客別への移行が完了していない状態。その場合は従来（非名前空間）キーをそのまま読み書きする
+function clientKey(base){ return currentClientId ? (base+'__'+currentClientId) : base; }
 function clientName(id){ const c=clients.find(c=>c.id===id); return c?c.name:''; }
 function saveClients(){ try{ localStorage.setItem('kv_clients', JSON.stringify(clients)); localStorage.setItem('kv_current', currentClientId); }catch(_){} }
 (function initClients(){
@@ -236,8 +247,25 @@ function saveClients(){ try{ localStorage.setItem('kv_clients', JSON.stringify(c
   if(!Array.isArray(list) || !list.length){
     // 初回/移行：既存の(非名前空間)データを「既定の顧客」へ移す（既存ユーザーのデータを失わない）
     const id='c'+Date.now().toString(36);
+    // 全件コピーに成功した場合のみ移行を確定する。1件でも失敗したら移行を中断し、
+    // コピー済みの複製だけ消して旧キー運用のまま継続（既存データは絶対に消さない）
+    let ok=true;
+    const copied=[];
+    for(const b of ['kv_state','kv_masters','kv_exporter']){
+      try{
+        const v=localStorage.getItem(b);
+        if(v==null) continue;
+        localStorage.setItem(b+'__'+id, v);
+        if(localStorage.getItem(b+'__'+id)!==v) throw new Error('verify failed: '+b);
+        copied.push(b+'__'+id);
+      }catch(e){ console.warn('[kv] 顧客別データへの移行に失敗しました（旧データのまま継続します）:', b, e); ok=false; break; }
+    }
+    if(!ok){
+      copied.forEach(k=>{ try{ localStorage.removeItem(k); }catch(_){} });   // 中途半端な複製だけ撤去（旧キーは温存）
+      clients=[{id:'', name:'既定の顧客'}]; currentClientId='';   // 旧キーのまま運用
+      return;   // kv_clients は書かない＝次回起動時に再度移行を試みる
+    }
     clients=[{id, name:'既定の顧客'}]; currentClientId=id;
-    ['kv_state','kv_masters','kv_exporter'].forEach(b=>{ try{ const v=localStorage.getItem(b); if(v!=null) localStorage.setItem(b+'__'+id, v); }catch(_){} });
     saveClients();
   } else {
     clients=list;
@@ -259,8 +287,115 @@ const DEFAULT_VENDOR_ALIAS = {
   "アマゾン":"Amazon","amazon":"Amazon","ヤマト":"ヤマト運輸","クロネコ":"ヤマト運輸","佐川":"佐川急便","エヌティティ":"NTT",
   "エネオス":"ENEOS","えねおす":"ENEOS","ジェイアール":"JR東日本"
 };
+// 弥生のサーチキー数字 → 勘定科目（音声で「460」と言えば消耗品費。1行1件「コード 科目名」）
+const DEFAULT_CODES_TEXT = [
+  "000 複合","001 未確定勘定","100 現金","101 小口現金","110 当座預金","115 普通預金",
+  "120 通知預金","124 定期預金","128 定期積金","129 別段預金","130 郵便貯金","140 受取手形",
+  "141 不渡手形","142 売掛金","146 仮払金","149 貸倒引当金(売)","150 有価証券","160 商品",
+  "161 製品","162 半製品","163 仕掛品","164 原材料","165 貯蔵品","166 副産物作業くず",
+  "170 前渡金","171 立替金","172 未収入金","173 短期貸付金","174 未収収益","175 前払費用",
+  "177 預け金","178 前払金","180 仮払消費税等","199 貸倒引当金(他)","200 建物","201 附属設備",
+  "202 構築物","203 機械装置","204 車両運搬具","205 工具器具備品","208 一括償却資産","209 減価償却累計額",
+  "210 買掛金","211 建設仮勘定","218 未払費用","220 預り金","221 施設利用権","222 未払消費税等",
+  "223 未払法人税等","224 借地権","225 ソフトウェア","231 役員借入金","240 投資有価証券","241 出資金",
+  "242 敷金","243 差入保証金","244 長期貸付金","245 長期固定性預金","246 長期滞留債権","247 長期前払費用",
+  "248 繰延税金資産","249 関係会社株式","250 関係会社出資金","251 預託金","252 貸倒引当金(投)","253 保険積立金",
+  "260 創立費","261 開業費","262 開発費","400 支払手形","406 設備支払手形","410 短期借入金",
+  "411 売上高","420 未払金","421 未払配当金","422 仕入高","428 仮受金","429 預り保証金",
+  "430 前受金","431 前受収益","432 割引手形","435 裏書手形","438 役員報酬","439 給料手当",
+  "440 仮受消費税等","444 法定福利費","445 福利厚生費","446 外注費","447 旅費交通費","448 通信費",
+  "449 交際費","450 支払手数料","451 賃借料","452 保険料","453 修繕費","454 租税公課",
+  "455 減価償却費","457 地代家賃","458 会議費","459 事務用品費","460 消耗品費","461 支払報酬料",
+  "462 水道光熱費","463 リース料","467 雑費","472 車両費","475 長期未払金","476 繰延税金負債",
+  "490 退職給付引当金","500 資本金","510 新株式申込証拠金","513 雑収入","520 資本準備金","525 資本金及び準備金減少差益",
+  "526 自己株式処分差額","530 利益準備金","535 別途積立金","540 繰越利益","550 自己株式","560 自己株式申込証拠金",
+  "570 その他有価証券評価差額金","575 繰延ヘッジ損益","580 土地再評価差額金","590 新株予約権","707 売上値引高","708 売上戻り高",
+  "709 売上割戻し高","710 役務収益","720 期首商品棚卸高","721 期首製品棚卸高","729 仕入値引高","730 仕入戻し高",
+  "731 仕入割戻し高","736 他勘定振替高(製)","737 期末商品棚卸高","738 期末製品棚卸高","739 他勘定振替高(商)","742 賞与",
+  "743 退職金","744 雑給","749 採用教育費","752 広告宣伝費","758 販売促進費","772 寄付金",
+  "773 研究開発費","784 長期前払費用償却","785 繰延資産償却(販)","786 貸倒損失(販)","787 貸倒引当金繰入額(販)","790 役員賞与",
+  "800 受取利息","801 受取配当金","802 仕入割引","803 有価証券売却益","804 貸倒引当金戻入額","830 支払利息",
+  "831 割引料","832 貸倒損失(外)","833 売上割引","834 有価証券売却損","835 繰延資産償却(外)","836 貸倒引当金繰入額(外)",
+  "837 手形売却損","846 雑損失","900 固定資産売却益","901 投資有価証券売却益","913 前期損益修正益","920 固定資産売却損",
+  "921 固定資産除却損","922 投資有価証券売却損","933 前期損益修正損","980 法人税等","981 法人税等調整額","982 法人税、住民税及び事業税"
+].join("\n");
 // 実際に使うマスタ（編集内容を反映。VENDOR_MATCHは別名キーも照合対象に）
-let ACCOUNTS=[], SUBS=[], VENDORS=[], VENDOR_ALIAS={}, VENDOR_MATCH=[];
+let ACCOUNTS=[], SUBS=[], VENDORS=[], VENDOR_ALIAS={}, VENDOR_MATCH=[], CODES={};
+// 「460 消耗品費」形式のテキスト → {コード:科目名}。区切りは半角/全角スペースまたはタブ、コードは半角化
+function _parseCodes(t){
+  const o={};
+  (t||'').split('\n').forEach(line=>{
+    const s0=String(line).replace(/[０-９]/g, c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).trim();
+    if(!s0) return;
+    const m=s0.match(/^([0-9]+)[\s\u3000\t]+(.+)$/); if(!m) return;
+    const k=m[1].trim(), v=m[2].trim(); if(k&&v) o[k]=v;
+  });
+  return o;
+}
+function _codesText(obj){ return Object.keys(obj).map(k=>k+' '+obj[k]).join('\n'); }
+// 発話/手入力を「サーチキー数字だけ」とみなせるか判定。全角半角化＋末尾の「番/番目/です」「。、.,」を除去
+// 数字＋実語（例:「460消耗品」）は数字扱いせず null を返し、従来のあいまい照合に回す
+function codeToken(raw){
+  let s = zen2han(String(raw==null?'':raw)).replace(/[\s　]+/g,'');
+  // 「460番です」「460番。」のように接尾語と句読点が重なる形に対応：変化が無くなるまで繰り返し除去
+  for(let g=0; g<8; g++){
+    const before = s;
+    s = s.replace(/[。、.,．，･・!！?？]+$/g,'');
+    s = s.replace(/(番目|番|です|でーす|ばん)$/,'');
+    if(s === before) break;
+  }
+  if(/^[0-9]+$/.test(s)) return s;
+  // ReazonSpeechは数字を漢数字で返すことがある（「四百六十」→460）。漢数字のみなら数値化して採用
+  if(/^[〇零一二三四五六七八九十百千万]+$/.test(s)){ const n=kanjiToNum(s); if(n!=null) return String(n); }
+  return null;
+}
+// 数字なら科目名に変換（コード表にヒットした場合のみ）。音声・手入力の共通経路
+function codeToAccount(raw){ const n=codeToken(raw); return (n && CODES[n]) ? CODES[n] : null; }
+// 弥生の科目設定エクスポート等（CSV/TSV/スペース区切り/PDFコピペ）から「コード 科目名」を抽出するヒューリスティック
+// 返り値: { codes:{コード:科目名}, names:[科目名...], bad:行数 }
+function parseCodeImport(text){
+  const codes={}, names=[]; let bad=0;
+  String(text||'').split(/\r\n|\r|\n/).forEach(line=>{
+    const s0 = zen2han(String(line)).replace(/[　]/g,' ').trim();
+    if(!s0) return;
+    // カンマ/タブ/連続スペースで分割 → 引用符とゴミを除去
+    const cells = s0.split(/[,\t]|\s{1,}/).map(c=>c.replace(/^["'　]+|["'　]+$/g,'').trim()).filter(c=>c!=='');
+    if(!cells.length) return;
+    // コード候補＝1〜8桁の数字セル。弥生公式並びはサーチキー数字が末尾なので、
+    // 末尾セルが数字ならそれを採用。そうでなければ従来どおり先頭の数字セル（金額列の誤検出を避ける）
+    const num=[]; for(let i=0;i<cells.length;i++){ if(/^[0-9]{1,8}$/.test(cells[i])) num.push(i); }
+    if(!num.length){ bad++; return; }
+    // 行頭の数字セル（「460 消耗品費 1,234」）を最優先、次に行末の数字セル（弥生公式並び）、それ以外は先頭候補
+    const chooseCode = list => (list[0]===0) ? 0 : ((list[list.length-1]===cells.length-1) ? list[list.length-1] : list[0]);
+    let ci = chooseCode(num);
+    // 年号らしき4桁（19xx/20xx）は他に候補があれば避ける
+    if(/^(19|20)[0-9]{2}$/.test(cells[ci]) && num.length>1){
+      const alt=num.filter(i=>i!==ci && !/^(19|20)[0-9]{2}$/.test(cells[i]));
+      if(alt.length) ci = chooseCode(alt);
+    }
+    // 科目名候補：漢字・ひらがな・全角カタカナを含むセルを最優先。
+    // 半角カナのみ／ASCII英字のみのセル（弥生のサーチキー英字・サーチキー他）は科目名にしない
+    const JA=/[々〆぀-ゟ゠-ヿ㐀-䶿一-鿿豈-﫿]/;
+    const HANKANA_ONLY=/^[｡-ﾟ\s]+$/, ASCII_ONLY=/^[A-Za-z\s_\-]+$/;
+    const isWord = c=>/[^0-9.\-\/%]/.test(c);
+    const pick = (test, back)=>{
+      for(let i=ci+1;i<cells.length;i++){ if(test(cells[i])) return cells[i]; }
+      if(back){ for(let i=ci-1;i>=0;i--){ if(test(cells[i])) return cells[i]; } }
+      return '';
+    };
+    // 第1段：日本語（漢字/ひらがな/全角カナ）を含むセル。コードが末尾なら行頭方向へも走査
+    let name = pick(c=>JA.test(c), true);
+    // 第2段：日本語が無い表でも動くよう、半角カナのみ／英字のみを除いた語のセル
+    if(!name) name = pick(c=>isWord(c) && !HANKANA_ONLY.test(c) && !ASCII_ONLY.test(c), ci===cells.length-1);
+    // 第3段：最後の手段（英字のみの科目名しか無い表）
+    if(!name) name = pick(isWord, ci===cells.length-1);
+    if(!name){ bad++; return; }
+    if(/^[0-9]+%?$/.test(name)){ bad++; return; }
+    codes[cells[ci]] = name;
+    if(names.indexOf(name)<0) names.push(name);
+  });
+  return { codes, names, bad };
+}
 function loadMasters(){
   let m={}; try{ m=JSON.parse(localStorage.getItem(clientKey('kv_masters'))||'{}')||{}; }catch(_){ m={}; }
   ACCOUNTS = ('accounts' in m && Array.isArray(m.accounts)) ? m.accounts.slice() : DEFAULT_ACCOUNTS.slice();
@@ -268,6 +403,7 @@ function loadMasters(){
   VENDORS  = ('vendors'  in m && Array.isArray(m.vendors))  ? m.vendors.slice()  : DEFAULT_VENDORS.slice();
   VENDOR_ALIAS = ('aliases' in m && m.aliases && typeof m.aliases==='object') ? Object.assign({},m.aliases) : Object.assign({},DEFAULT_VENDOR_ALIAS);
   VENDOR_MATCH = VENDORS.concat(Object.keys(VENDOR_ALIAS));   // 照合は別名キーも対象に
+  CODES = ('codes' in m && m.codes && typeof m.codes==='object') ? Object.assign({},m.codes) : _parseCodes(DEFAULT_CODES_TEXT);   // 未保存の既存データは既定を使う
 }
 loadMasters();
 function canonVendor(v){ return VENDOR_ALIAS[v] || v; }           // 一致した別名を正式名へ
@@ -474,7 +610,12 @@ function fillCell(i,k,text){
   if(k==='date'){ const d=extractDate(raw,$('year').value); v=d.date||raw; }
   else if(k==='amount'){ const a=extractAmount(raw); const n=(a.amount!==''&&a.amount!=null)?a.amount:parseAmountTok(hay); v=(n==null?raw:n); }
   else if(k==='vendor'){ const m=pickMaster(hay,VENDOR_MATCH); v=m?canonVendor(m.v):raw; }
-  else if(k==='account'){ const m=pickMaster(hay,ACCOUNTS); v=m?m.v:raw; }
+  else if(k==='account'){
+    // サーチキー数字（例:「460」）だけを言った場合はコード表で確定。それ以外は従来の吸着
+    const byCode=codeToAccount(raw);
+    if(byCode){ v=byCode; }
+    else { const m=pickMaster(hay,ACCOUNTS); v=m?m.v:raw; }
+  }
   else if(k==='sub'){ const m=pickMaster(hay,SUBS); v=m?m.v:raw; }
   else if(k==='tax'){ const rk = /(8|８|八|軽減)/.test(raw)?'8' : /(10|１０|十|標準)/.test(raw)?'10' : null; v=rk?taxStringFor(rk,$('taxd').value):raw; }   // 「十%」「八%」等の漢数字も対応
   r[k]=v;
@@ -588,7 +729,8 @@ let voiceInterim = '';   // （未使用・後方互換）
 let groupSeq = 0;        // 複合仕訳のグループID採番
 const $ = id => document.getElementById(id);
 function rowClass(r){ const bad = !isRowEmpty(r) && (!r.account || r.amount==='' || (!r.date && r.group==null)); return [bad?'bad':'', r.group?'grp':''].filter(Boolean).join(' '); }   // 空行は警告色にしない。複合の続き行は日付未入力でもOK
-function escAttr(v){ return String(v==null?'':v).replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+// HTML属性/テキストへ外部由来文字列を埋める際の共通エスケープ（& は最初に置換すること）
+function escAttr(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function cellInput(e){
   const i=+e.target.dataset.i, k=e.target.dataset.k;
   rows[i][k]=e.target.value;
@@ -597,6 +739,15 @@ function cellInput(e){
   persist();
 }
 function cellFocus(e){ activeR=+e.target.dataset.i; activeC=EDCOLS.indexOf(e.target.dataset.k); highlightCell(); }
+// 手入力の確定時：勘定科目セルにサーチキー数字（例:「460」）だけを打ったら科目名へ変換（音声経路と同じ判定）
+function cellBlur(e){
+  const k=e.target.dataset.k; if(k!=='account') return;
+  const i=+e.target.dataset.i, r=rows[i]; if(!r) return;
+  const v=codeToAccount(e.target.value); if(!v) return;
+  r.account=v; e.target.value=v;
+  const tr=e.target.closest('tr'); if(tr) tr.className=rowClass(r);
+  persist();
+}
 function cellKey(e){   // 手入力中の十字キー移動（カーソル端でセル移動）
   const i=+e.target.dataset.i, c=EDCOLS.indexOf(e.target.dataset.k), el=e.target;
   if(e.key==='ArrowDown'||e.key==='Enter'){ e.preventDefault(); focusCell(i+1,c); }
@@ -625,7 +776,7 @@ function rowTr(i){
     <td><input value="${escAttr(r.tax||$('taxd').value)}" list="dl-tax" data-i="${i}" data-k="tax"></td>
     <td class="amt"><input value="${escAttr(r.amount)}" data-i="${i}" data-k="amount"></td>
     <td class="del" data-del="${i}">×</td>`;
-  tr.querySelectorAll('input').forEach(inp=>{ inp.oninput=cellInput; inp.onfocus=cellFocus; inp.onkeydown=cellKey; });
+  tr.querySelectorAll('input').forEach(inp=>{ inp.oninput=cellInput; inp.onfocus=cellFocus; inp.onblur=cellBlur; inp.onkeydown=cellKey; });
   tr.querySelector('.del').onclick = ()=>{ rows.splice(i,1); if(!rows.length) rows.push(emptyRow()); render(); };
   const lk=tr.querySelector('.lnk'); if(lk) lk.onclick = ()=> toggleGroup(i);
   return tr;
@@ -635,22 +786,24 @@ let _persistT=null;
 function persist(){
   if(_persistT) clearTimeout(_persistT);
   _persistT=setTimeout(()=>{ try{ localStorage.setItem(clientKey('kv_state'), JSON.stringify({
-    rows, groupSeq, year:$('year').value, counter:$('counter').value, taxd:$('taxd').value
+    rows, groupSeq, year:$('year').value, counter:$('counter').value, counterSub:($('counterSub')?$('counterSub').value:''), taxd:$('taxd').value
   })); flashSaved(); }catch(_){} }, 400);   // 連打を400msデバウンス
 }
 function flushPersist(){   // 保存待ちを即確定（顧客切替の直前など、取りこぼし防止）
   if(_persistT){ clearTimeout(_persistT); _persistT=null; }
-  try{ localStorage.setItem(clientKey('kv_state'), JSON.stringify({ rows, groupSeq, year:$('year').value, counter:$('counter').value, taxd:$('taxd').value })); }catch(_){}
+  try{ localStorage.setItem(clientKey('kv_state'), JSON.stringify({ rows, groupSeq, year:$('year').value, counter:$('counter').value, counterSub:($('counterSub')?$('counterSub').value:''), taxd:$('taxd').value })); }catch(_){}
 }
 function restoreState(){
   let st=null; try{ st=JSON.parse(localStorage.getItem(clientKey('kv_state'))||'null'); }catch(_){ st=null; }
   if(!st || !Array.isArray(st.rows)) return false;
-  const restored = st.rows.map(r=>Object.assign(emptyRow(), r));   // 欠損キーを既定で補完
-  if(!restored.some(r=>!isRowEmpty(r))) return false;              // 中身が無ければ復元しない
-  rows = restored; groupSeq = (+st.groupSeq||0);
+  // ヘッダ設定（年度・相手科目・補助・税区分）は行が空でも先に復元する
   if(st.year!=null) $('year').value=st.year;
   if(st.counter!=null) $('counter').value=st.counter;
+  if($('counterSub')) $('counterSub').value = (st.counterSub!=null? st.counterSub : '');   // 旧データにキーが無ければ空
   if(st.taxd!=null) $('taxd').value=st.taxd;
+  const restored = st.rows.map(r=>Object.assign(emptyRow(), r));   // 欠損キーを既定で補完
+  if(!restored.some(r=>!isRowEmpty(r))) return false;              // 中身が無ければ（行は）復元しない
+  rows = restored; groupSeq = (+st.groupSeq||0);
   ensureTrailingEmpty();
   return true;
 }
@@ -806,31 +959,87 @@ $('tbody').addEventListener('mousedown', e=>{
 });
 
 // 勘定科目の候補（修正時にプルダウンから選べる）。税区分は出力先エクスポータから供給
-function fillDatalist(id, items){ const el=$(id); if(el) el.innerHTML = items.map(v=>`<option value="${v}">`).join(''); }
+function fillDatalist(id, items){ const el=$(id); if(el) el.innerHTML = items.map(v=>`<option value="${escAttr(v)}">`).join(''); }
 fillDatalist('dl-acc', ACCOUNTS);
 
 // ───────── マスタ編集（画面から追加・削除。端末に保存） ─────────
 function _lines(t){ return (t||'').split('\n').map(s=>s.trim()).filter(Boolean); }
 function _aliasText(obj){ return Object.keys(obj).map(k=>k+'='+obj[k]).join('\n'); }
 function _parseAlias(t){ const o={}; _lines(t).forEach(line=>{ const i=line.indexOf('='); if(i>0){ const k=line.slice(0,i).trim(), v=line.slice(i+1).trim(); if(k&&v) o[k]=v; } }); return o; }
-function masterFill(vendors, accounts, subs, alias){
+function masterFill(vendors, accounts, subs, alias, codes){
   $('m-vendors').value = vendors.join('\n'); $('m-accounts').value = accounts.join('\n');
   $('m-subs').value = subs.join('\n'); $('m-aliases').value = _aliasText(alias);
+  if($('m-codes')) $('m-codes').value = _codesText(codes||{});
+  updateCodesCount();
 }
-function openMaster(){ masterFill(VENDORS, ACCOUNTS, SUBS, VENDOR_ALIAS); $('masterModal').style.display='flex'; }
+function updateCodesCount(){   // コード表の登録件数表示（不正行があれば併記）
+  const el=$('m-codes-count'), ta=$('m-codes'); if(!el||!ta) return;
+  const st=_codesStats(ta.value);
+  el.textContent = st.count+'件' + (st.bad? '（読み取れない行 '+st.bad+'）':'') + (st.dup? '／重複コード '+st.dup+'':'');
+}
+// コード表テキストの統計（件数・パース不能行・重複コード数）
+function _codesStats(t){
+  const seen={}; let bad=0, dup=0;
+  (t||'').split('\n').forEach(line=>{
+    const s0=zen2han(String(line)).trim(); if(!s0) return;
+    const m=s0.match(/^([0-9]+)[\s　\t]+(.+)$/);
+    if(!m || !m[2].trim()){ bad++; return; }
+    const k=m[1]; if(seen[k]) dup++; else seen[k]=1;
+  });
+  return { count:Object.keys(seen).length, bad, dup };
+}
+function openMaster(){ masterFill(VENDORS, ACCOUNTS, SUBS, VENDOR_ALIAS, CODES); $('masterModal').style.display='flex'; }
 function closeMaster(){ $('masterModal').style.display='none'; }
 function saveMaster(){
-  const m={ vendors:_lines($('m-vendors').value), accounts:_lines($('m-accounts').value), subs:_lines($('m-subs').value), aliases:_parseAlias($('m-aliases').value) };
-  try{ localStorage.setItem(clientKey('kv_masters'), JSON.stringify(m)); }catch(_){}
+  const st=_codesStats($('m-codes')?$('m-codes').value:'');
+  const m={ vendors:_lines($('m-vendors').value), accounts:_lines($('m-accounts').value), subs:_lines($('m-subs').value), aliases:_parseAlias($('m-aliases').value), codes:_parseCodes($('m-codes')?$('m-codes').value:'') };
+  try{ localStorage.setItem(clientKey('kv_masters'), JSON.stringify(m)); }
+  catch(_){ toast('保存に失敗しました（容量超過の可能性）', 8000); return; }
   loadMasters(); fillDatalist('dl-acc', ACCOUNTS);   // 吸着リスト＋プルダウンに即反映
-  closeMaster(); toast('マスタを保存しました');
+  if(st.bad || st.dup){
+    // 保存はするが、直せるようモーダルは開いたまま警告（原文テキストエリアも保持）
+    const w=[]; if(st.bad) w.push('読み取れない行が'+st.bad+'件（無視しました）'); if(st.dup) w.push('コードの重複が'+st.dup+'件（後の行を優先）');
+    updateCodesCount();
+    toast('マスタを保存しました。'+w.join('／')+'／内容をご確認ください（この画面は開いたままです）', 10000);
+  } else { closeMaster(); toast('マスタを保存しました'); }
+}
+// 弥生の科目表ファイル（Shift_JIS/UTF-8自動判定）を読み込み、コード表へ反映
+function importCodesFile(file){
+  if(!file) return;
+  const fr=new FileReader();
+  fr.onload=()=>{
+    let text='';
+    try{
+      const buf=new Uint8Array(fr.result);
+      if(window.Encoding){ text=Encoding.convert(buf, { to:'UNICODE', from:Encoding.detect(buf)||'AUTO', type:'string' }); }
+      else text=new TextDecoder('utf-8').decode(buf);
+    }catch(e){ toast('ファイルを読めませんでした: '+e, 8000); return; }
+    const res=parseCodeImport(text);
+    const n=Object.keys(res.codes).length;
+    if(!n){ toast('科目コードを検出できませんでした（書式をご確認ください）', 8000); return; }
+    const skipped = res.bad ? '\n読み取れなかった行：'+res.bad+'行（無視します）' : '';
+    if(!confirm(n+'件の科目コードを検出しました。'+skipped+'\n現在のコード表を上書きします。よろしいですか？\n（「保存」を押すまで確定しません）')) return;
+    $('m-codes').value = _codesText(res.codes);
+    // 勘定科目マスタに無い科目名の追記も確認
+    const cur=_lines($('m-accounts').value), add=res.names.filter(v=>cur.indexOf(v)<0);
+    if(add.length && confirm('勘定科目マスタに無い科目が'+add.length+'件あります。追加しますか？')){
+      $('m-accounts').value = cur.concat(add).join('\n');
+    }
+    updateCodesCount();
+    toast('取り込みました（内容を確認して「保存」を押してください）', 6000);
+  };
+  fr.onerror=()=> toast('ファイルを読めませんでした', 8000);
+  fr.readAsArrayBuffer(file);
 }
 if($('masterBtn')){
   $('masterBtn').onclick = openMaster;
   $('m-cancel').onclick = closeMaster;
   $('m-save').onclick = saveMaster;
-  $('m-reset').onclick = ()=>{ masterFill(DEFAULT_VENDORS, DEFAULT_ACCOUNTS, DEFAULT_SUBS, DEFAULT_VENDOR_ALIAS); toast('既定を読み込みました（「保存」で確定）'); };
+  $('m-reset').onclick = ()=>{ masterFill(DEFAULT_VENDORS, DEFAULT_ACCOUNTS, DEFAULT_SUBS, DEFAULT_VENDOR_ALIAS, _parseCodes(DEFAULT_CODES_TEXT)); toast('既定を読み込みました（「保存」で確定）'); };
   $('masterModal').addEventListener('click', e=>{ if(e.target.id==='masterModal') closeMaster(); });  // 背景クリックで閉じる
+  if($('m-codes-import')) $('m-codes-import').onclick = ()=>{ const f=$('m-codes-file'); if(f){ f.value=''; f.click(); } };
+  if($('m-codes-file')) $('m-codes-file').onchange = e=>{ importCodesFile(e.target.files && e.target.files[0]); };
+  if($('m-codes')) $('m-codes').addEventListener('input', updateCodesCount);
 }
 
 // ───────── CSV出力 ─────────
@@ -873,9 +1082,9 @@ function taxAmount(amount, cat){
 }
 
 // 25列を組み立て（借方・貸方を指定。数字列はベタ、文字列はクォート）
-function yayoiRow(flag, denpyo, dateW, dAcc, dSub, dTax, dAmt, dTaxAmt, cAcc, cTax, cAmt, type, tekiyo){
-  return [ q(flag), denpyo, q(""), q(dateW), q(dAcc), q(dSub), q(""), q(dTax), dAmt, dTaxAmt,
-    q(cAcc), q(""), q(""), q(cTax), cAmt, 0, q(tekiyo||""), q(""), q(""), type, q(""), q(""), q("0"), q("0"), q("no") ].join(',');
+function yayoiRow(flag, denpyo, dateW, dAcc, dSub, dTax, dAmt, dTaxAmt, cAcc, cSub, cTax, cAmt, type, tekiyo){
+  return [ q(flag), denpyo, q(""), q(dateW), q(dAcc), q(dSub||""), q(""), q(dTax), dAmt, dTaxAmt,
+    q(cAcc), q(cSub||""), q(""), q(cTax), cAmt, 0, q(tekiyo||""), q(""), q(""), type, q(""), q(""), q("0"), q("0"), q("no") ].join(',');
 }
 
 // ───────── 出力先サービス（差し替え式エクスポータ）。中立の表データ→各社の取込形式 ─────────
@@ -889,7 +1098,7 @@ const EXPORTERS = {
     // 弥生インポート形式（25列・ヘッダ無し・Shift_JIS・CRLF）— 実エクスポートに一致
     build(data, opt){
       data.forEach(r=>{ const dd=extractDate(r.date,opt.year); if(dd.date) r.date=dd.date; });
-      const counter=opt.counter, taxd=opt.taxd;
+      const counter=opt.counter, counterSub=opt.counterSub||'', taxd=opt.taxd;
       const groups=[]; const byId={};
       data.forEach(r=>{ if(r.group==null){ groups.push([r]); } else { if(!byId[r.group]){ byId[r.group]=[]; groups.push(byId[r.group]); } byId[r.group].push(r); } });
       const lines=[]; let denpyo=0;
@@ -898,12 +1107,12 @@ const EXPORTERS = {
         if(g.length===1){
           const r=g[0], tax=r.tax||taxd, amt=parseInt(r.amount,10)||0;
           const tekiyo=[r.memo, r.vendor].filter(Boolean).join(' ');
-          lines.push(yayoiRow("2000", denpyo, wareki(r.date), r.account, r.sub, tax, amt, taxAmount(amt,tax), counter, "対象外", amt, 0, tekiyo));
+          lines.push(yayoiRow("2000", denpyo, wareki(r.date), r.account, r.sub, tax, amt, taxAmount(amt,tax), counter, counterSub, "対象外", amt, 0, tekiyo));
         } else {
           const total=g.reduce((s,r)=> s + (parseInt(r.amount,10)||0), 0);
           g.forEach((r,idx)=>{ const tax=r.tax||taxd, amt=parseInt(r.amount,10)||0;
-            lines.push(yayoiRow(idx===0?"2110":"2100", denpyo, wareki(g[0].date), r.account, r.sub, tax, amt, taxAmount(amt,tax), "", "対象外", 0, 3, r.memo||"")); });
-          lines.push(yayoiRow("2101", denpyo, wareki(g[0].date), "", "", "対象外", 0, 0, counter, "対象外", total, 3, g[0].vendor||""));
+            lines.push(yayoiRow(idx===0?"2110":"2100", denpyo, wareki(g[0].date), r.account, r.sub, tax, amt, taxAmount(amt,tax), "", "", "対象外", 0, 3, r.memo||"")); });
+          lines.push(yayoiRow("2101", denpyo, wareki(g[0].date), "", "", "対象外", 0, 0, counter, counterSub, "対象外", total, 3, g[0].vendor||""));
         }
       }
       const text=lines.join('\r\n')+'\r\n';
@@ -929,7 +1138,7 @@ function runExport(){
   const data = rows.filter(r=>!isRowEmpty(r));   // 末尾の空行などは除外
   if(!data.length) return alert('表が空です');
   const ex=curExporter();
-  const out=ex.build(data, { counter:$('counter').value, taxd:$('taxd').value, year:$('year').value });
+  const out=ex.build(data, { counter:$('counter').value, counterSub:($('counterSub')?$('counterSub').value:''), taxd:$('taxd').value, year:$('year').value });
   if(out.warn) alert(out.warn);
   // ファイル名に顧客名を付与（例：yayoi_import_山田商店.txt）
   let fn=out.filename; const cn=(clientName(currentClientId)||'').replace(/[\\/:*?"<>|\s]/g,'').trim();
@@ -1001,6 +1210,7 @@ function loadCurrentClientData(){   // 現在の顧客のマスタ・出力先�
   let ex='yayoi'; try{ const sv=localStorage.getItem(clientKey('kv_exporter')); if(sv && EXPORTERS[sv] && EXPORTERS[sv].ready) ex=sv; }catch(_){}
   exporterId=ex; const es=$('exporterSel'); if(es) es.value=ex; refreshExporterUI();
   $('year').value='2026'; $('counter').value='現金'; $('taxd').value=(curExporter().defaultTax||'課対仕入内10%適格');
+  if($('counterSub')) $('counterSub').value='';   // 顧客切替で前の顧客の相手補助科目を持ち越さない
   rows=[]; groupSeq=0; if(!restoreState()) rows=[emptyRow()];
   render(); highlightCell();
 }
@@ -1054,7 +1264,7 @@ if($('clientSel')){
   $('clientModal').addEventListener('click', e=>{ if(e.target.id==='clientModal') $('clientModal').style.display='none'; });
   populateClientSel();
 }
-['year','counter','taxd'].forEach(id=>{ const e=$(id); if(e) e.addEventListener('input', persist); });   // ヘッダ設定も自動保存
+['year','counter','counterSub','taxd'].forEach(id=>{ const e=$(id); if(e) e.addEventListener('input', persist); });   // ヘッダ設定も自動保存
 if(_restored) setTimeout(()=>toast('前回の入力を復元しました（「表をクリア」で消去）', 5000), 300);
 
 // ───────── 自動アップデート（デスクトップアプリ内のみ） ─────────
