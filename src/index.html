@@ -201,7 +201,7 @@
           <button class="ghost" id="m-codes-import" style="margin-left:auto; font-size:12px; padding:4px 10px;">弥生の科目表を取り込む</button>
           <input type="file" id="m-codes-file" accept=".csv,.txt,text/csv,text/plain" style="display:none;">
         </div>
-        <p style="color:#5a6675; font-size:11px; margin:4px 0 4px; line-height:1.5;">弥生の「科目設定」書き出しファイル（CSV/TXT・Shift_JIS可）を選ぶと自動で読み取ります。手元にテキストがある場合は、下の欄に直接貼り付けても構いません（1行に「コード 科目名」）。</p>
+        <p style="color:#5a6675; font-size:11px; margin:4px 0 4px; line-height:1.5;">弥生会計の［科目設定］→［エクスポート］で、帳票「勘定科目一覧表」・書式「汎用形式」・区切り「カンマ(CSV)」（タブ区切りも可）を書き出し、そのファイル（CSV/TXT・Shift_JIS可）を選ぶと自動で読み取ります。手元にテキストがある場合は、下の欄に直接貼り付けても構いません（1行に「コード 科目名」）。</p>
         <textarea id="m-codes" style="width:100%; box-sizing:border-box; height:170px; font-size:13px; padding:8px; border:1px solid #c9d2dc; border-radius:8px; resize:vertical;"></textarea></div>
     </div>
     <div class="row" style="margin-top:16px; justify-content:flex-end; gap:8px;">
@@ -351,10 +351,81 @@ function codeToken(raw){
 }
 // 数字なら科目名に変換（コード表にヒットした場合のみ）。音声・手入力の共通経路
 function codeToAccount(raw){ const n=codeToken(raw); return (n && CODES[n]) ? CODES[n] : null; }
+// 引用符対応の1行分割（"" は文字としての " ）。区切り内のカンマ・空白を壊さない
+function _splitRow(line, sep){
+  const out=[]; let cur='', q=false;
+  for(let i=0;i<line.length;i++){
+    const c=line[i];
+    if(q){ if(c==='"'){ if(line[i+1]==='"'){ cur+='"'; i++; } else q=false; } else cur+=c; }
+    else if(c==='"') q=true;
+    else if(c===sep){ out.push(cur); cur=''; }
+    else cur+=c;
+  }
+  out.push(cur); return out;
+}
+// 弥生「勘定科目一覧表・汎用形式」の構造パーサ。[表題行]から列位置を確定できたときだけ成立する。
+// 該当形式でなければ null を返し、呼び出し側は従来のヒューリスティックへフォールバックする
+// 返り値: { codes, names, bad, dup, title, office }
+function parseYayoiKamokuTable(text){
+  const rows = String(text||'').split(/\r\n|\r|\n/).filter(l=>l.trim()!=='');
+  const head = rows.find(l=>l.indexOf('[表題行]')>=0);
+  if(!head) return null;
+  // 弥生は「カンマ(CSV形式)」と「タブ形式」を選べる。タブがありカンマが無ければタブ区切り
+  const sep = (head.indexOf('\t')>=0 && head.indexOf(',')<0) ? '\t' : ',';
+  const hd = _splitRow(head, sep).map(c=>c.trim());
+  const codeCol = hd.indexOf('サーチキー数字');
+  const lvCols = []; hd.forEach((h,i)=>{ if(/^階層/.test(h)) lvCols.push(i); });
+  if(codeCol<0 || !lvCols.length) return null;   // 列が読めない＝この形式ではない
+  const codes={}, names=[], dupList=[]; let bad=0, dup=0, noCode=0, title='', office='';
+  rows.forEach(line=>{
+    const c=_splitRow(line, sep).map(x=>x.trim());
+    if(!c.length) return;
+    if(c[0]==='帳票名'  && c[1] && !title)  { title=c[1];  return; }   // 確認ダイアログ用のメタ情報
+    if(c[0]==='事業所名' && c[1] && !office){ office=c[1]; return; }
+    if(c[0]!=='[明細行]' && c[0]!=='[科目行]') return;   // [区分行]/[合計行]/メタ行は対象外
+    // 科目名＝階層1〜6のうち「完全括弧でない」最後の非空セル。
+    // 「[資産]」「[現金･預金]」等の分類名は完全括弧なので除外し、
+    // 「[製]期首材料棚卸高」は閉じ括弧の後ろに文字が続くので科目名として採用する
+    let name='';
+    for(let k=0;k<lvCols.length;k++){
+      const v=c[lvCols[k]]; if(!v) continue;
+      if(/^\[[^\]]*\]$/.test(v)) continue;
+      name=v;
+    }
+    const code = zen2han(c[codeCol]||'').trim();
+    if(!/^[0-9]{1,8}$/.test(code)){ noCode++; return; }   // サーチキー数字が未設定／「*100」等（件数は確認画面に出す）
+    if(!name){ bad++; return; }
+    if(Object.prototype.hasOwnProperty.call(codes, code)){   // 同一コードは後の行が勝つ。実例も控える
+      dup++;
+      if(dupList.length<5) dupList.push(code+': '+name+'（'+codes[code]+'を上書き）');
+    }
+    codes[code]=name;
+    if(names.indexOf(name)<0) names.push(name);
+  });
+  return { codes, names, bad, dup, dupList, noCode, title, office };
+}
 // 弥生の科目設定エクスポート等（CSV/TSV/スペース区切り/PDFコピペ）から「コード 科目名」を抽出するヒューリスティック
 // 返り値: { codes:{コード:科目名}, names:[科目名...], bad:行数 }
 function parseCodeImport(text){
+  // 弥生「勘定科目一覧表・汎用形式」は列構造が確定しているので専用パーサを先に試す（ヒューリスティックでは
+  // 階層列に散らばる科目名と分類名を判別できない）。構造を認識できたら 0 件でもその結果で確定させる
+  // （推測経路に落とすとメタ行から「2026→年度」のような偽コードを作ってしまう）
+  const tbl = parseYayoiKamokuTable(text);
+  if(tbl) return tbl;
   const codes={}, names=[]; let bad=0;
+  // 科目名として絶対に採用しない語。弥生の 行種別／貸借区分／税計算区分／税端数処理／請求書区分／非表示 の列値
+  const NG_EXACT = ['借方','貸方','対象外','指定なし','適格','区分記載','内税','外税','標準自動','自動','手入力',
+                    '切捨','切上','四捨五入','共通','不課税','対象','軽減','標準','no','yes','なし',
+                    '[表題行]','[明細行]','[区分行]','[合計行]','[科目行]'];
+  // 税区分の値は「完全一致」だけで弾く（末尾の「返」「10%」表記は許容）。前方一致にすると
+  // 「課税売上高」「非課税売上高」「課税仕入」のような実在の勘定科目まで潰してしまう
+  const NG_TAX = /^(課対仕入|課対仕返|課税売上|課税売返|課税売倒|非課仕入|非課売上|非課売返|非対仕入|共対仕入|有価譲渡)(返)?([0-9]{1,2}%)?$/;
+  // 「課対仕入8%（軽）」「課対輸本7.8%」のような税率付き表記。％を含むものだけを対象にするので
+  // 「課税売上高」「非課税売上高」「課税仕入」は当たらない
+  const NG_TAX_PCT = /^(課対|課税|非課|非対|共対|不課税).*[%％]/;
+  const isNG = c=>{ const s=String(c); return NG_EXACT.indexOf(s)>=0 || NG_EXACT.indexOf(s.toLowerCase())>=0 || NG_TAX.test(s) || NG_TAX_PCT.test(s); };
+  // 「税区分らしいセル」。弥生の科目行は必ず税区分列を持つので、行の素性判定に使う
+  const isTaxCell = c=>NG_TAX.test(c) || NG_TAX_PCT.test(c) || c==='対象外' || c==='不課税' || c==='共通' || c==='指定なし';
   String(text||'').split(/\r\n|\r|\n/).forEach(line=>{
     const s0 = zen2han(String(line)).replace(/[　]/g,' ').trim();
     if(!s0) return;
@@ -364,31 +435,43 @@ function parseCodeImport(text){
     // コード候補＝1〜8桁の数字セル。弥生公式並びはサーチキー数字が末尾なので、
     // 末尾セルが数字ならそれを採用。そうでなければ従来どおり先頭の数字セル（金額列の誤検出を避ける）
     const num=[]; for(let i=0;i<cells.length;i++){ if(/^[0-9]{1,8}$/.test(cells[i])) num.push(i); }
-    if(!num.length){ bad++; return; }
+    // 貸借区分（借方/貸方）セルの位置。弥生の並びではサーチキー数字がこれより左に来る
+    let dc=-1; for(let i=0;i<cells.length;i++){ if(cells[i]==='借方'||cells[i]==='貸方'){ dc=i; break; } }
+    // サーチキー数字は必ず貸借区分より左。行頭が貸借区分（dc===0）の「借方,100,現金」形だけ
+    // 従来どおり全数字セルを候補にし、それ以外は貸借区分より左に限る（税率列の誤採用を防ぐ）
+    const cand = (dc>=1) ? num.filter(i=>i<dc) : num;
+    // 弥生の科目行（勘定科目…サーチキー数字…貸借区分…税区分…と続く広い行）かどうか。
+    // 税区分らしいセルの有無まで見ないと「2024 決算修正 460 消耗品費 借方 1234」を取り違える
+    const wide = (dc>=2 && cells.length>=6 && cells.some(isTaxCell));
+    // 有効なコードが1つも無い行（ヘッダ行・分類行・空行、「*100」のように数字として成立しない行、
+    // 弥生でサーチキー数字が未設定の科目）は、そもそも取り込む対象ではないので静かに読み飛ばす。
+    // bad は「コードはあるのに科目名が取れない行」だけ数える
+    if(!cand.length) return;
     // 行頭の数字セル（「460 消耗品費 1,234」）を最優先、次に行末の数字セル（弥生公式並び）、それ以外は先頭候補
     const chooseCode = list => (list[0]===0) ? 0 : ((list[list.length-1]===cells.length-1) ? list[list.length-1] : list[0]);
-    let ci = chooseCode(num);
+    let ci = chooseCode(cand);
     // 年号らしき4桁（19xx/20xx）は他に候補があれば避ける
-    if(/^(19|20)[0-9]{2}$/.test(cells[ci]) && num.length>1){
-      const alt=num.filter(i=>i!==ci && !/^(19|20)[0-9]{2}$/.test(cells[i]));
+    if(/^(19|20)[0-9]{2}$/.test(cells[ci]) && cand.length>1){
+      const alt=cand.filter(i=>i!==ci && !/^(19|20)[0-9]{2}$/.test(cells[i]));
       if(alt.length) ci = chooseCode(alt);
     }
-    // 科目名候補：漢字・ひらがな・全角カタカナを含むセルを最優先。
+    // 科目名らしさ：漢字・ひらがな・全角カタカナ・【】（弥生の【製】付き科目）を含むセルを最優先。
     // 半角カナのみ／ASCII英字のみのセル（弥生のサーチキー英字・サーチキー他）は科目名にしない
-    const JA=/[々〆぀-ゟ゠-ヿ㐀-䶿一-鿿豈-﫿]/;
+    const JA=/[々〆【】぀-ゟ゠-ヿ㐀-䶿一-鿿豈-﫿]/;
     const HANKANA_ONLY=/^[｡-ﾟ\s]+$/, ASCII_ONLY=/^[A-Za-z\s_\-]+$/;
     const isWord = c=>/[^0-9.\-\/%]/.test(c);
-    const pick = (test, back)=>{
-      for(let i=ci+1;i<cells.length;i++){ if(test(cells[i])) return cells[i]; }
-      if(back){ for(let i=ci-1;i>=0;i--){ if(test(cells[i])) return cells[i]; } }
-      return '';
-    };
-    // 第1段：日本語（漢字/ひらがな/全角カナ）を含むセル。コードが末尾なら行頭方向へも走査
-    let name = pick(c=>JA.test(c), true);
+    // 科目名の走査：弥生の広い行は 勘定科目,サーチキー英字,サーチキー数字,…,貸借区分,… の並びで
+    // 科目名がコードより左にあるため左優先。それ以外（「分類, コード, 科目名」や
+    // 「2024 決算修正 460 消耗品費」のようなPDF/Excel由来）は右優先で、無ければ左へ回る
+    const fwd = test=>{ for(let i=ci+1;i<cells.length;i++){ if(!isNG(cells[i]) && test(cells[i])) return cells[i]; } return ''; };
+    const bwd = test=>{ for(let i=ci-1;i>=0;i--){ if(!isNG(cells[i]) && test(cells[i])) return cells[i]; } return ''; };
+    const pick = test=> wide ? (bwd(test)||fwd(test)) : (fwd(test)||bwd(test));
+    // 第1段：日本語（漢字/ひらがな/全角カナ/【】）を含むセル
+    let name = pick(c=>JA.test(c));
     // 第2段：日本語が無い表でも動くよう、半角カナのみ／英字のみを除いた語のセル
-    if(!name) name = pick(c=>isWord(c) && !HANKANA_ONLY.test(c) && !ASCII_ONLY.test(c), ci===cells.length-1);
-    // 第3段：最後の手段（英字のみの科目名しか無い表）
-    if(!name) name = pick(isWord, ci===cells.length-1);
+    if(!name) name = pick(c=>isWord(c) && !HANKANA_ONLY.test(c) && !ASCII_ONLY.test(c));
+    // 第3段：最後の手段（英字のみ／半角カナのみの科目名しか無い表）
+    if(!name) name = pick(isWord);
     if(!name){ bad++; return; }
     if(/^[0-9]+%?$/.test(name)){ bad++; return; }
     codes[cells[ci]] = name;
@@ -398,12 +481,14 @@ function parseCodeImport(text){
 }
 function loadMasters(){
   let m={}; try{ m=JSON.parse(localStorage.getItem(clientKey('kv_masters'))||'{}')||{}; }catch(_){ m={}; }
-  ACCOUNTS = ('accounts' in m && Array.isArray(m.accounts)) ? m.accounts.slice() : DEFAULT_ACCOUNTS.slice();
-  SUBS     = ('subs'     in m && Array.isArray(m.subs))     ? m.subs.slice()     : DEFAULT_SUBS.slice();
-  VENDORS  = ('vendors'  in m && Array.isArray(m.vendors))  ? m.vendors.slice()  : DEFAULT_VENDORS.slice();
+  // 空配列／空オブジェクトは「壊れた保存」とみなし既定へフォールバック。
+  // 空のまま採用すると照合・プルダウンが全滅し、マスタ画面を開くたび空が再表示されて固定化するため
+  ACCOUNTS = ('accounts' in m && Array.isArray(m.accounts) && m.accounts.length) ? m.accounts.slice() : DEFAULT_ACCOUNTS.slice();
+  SUBS     = ('subs'     in m && Array.isArray(m.subs)     && m.subs.length)     ? m.subs.slice()     : DEFAULT_SUBS.slice();
+  VENDORS  = ('vendors'  in m && Array.isArray(m.vendors)  && m.vendors.length)  ? m.vendors.slice()  : DEFAULT_VENDORS.slice();
   VENDOR_ALIAS = ('aliases' in m && m.aliases && typeof m.aliases==='object') ? Object.assign({},m.aliases) : Object.assign({},DEFAULT_VENDOR_ALIAS);
   VENDOR_MATCH = VENDORS.concat(Object.keys(VENDOR_ALIAS));   // 照合は別名キーも対象に
-  CODES = ('codes' in m && m.codes && typeof m.codes==='object') ? Object.assign({},m.codes) : _parseCodes(DEFAULT_CODES_TEXT);   // 未保存の既存データは既定を使う
+  CODES = ('codes' in m && m.codes && typeof m.codes==='object' && Object.keys(m.codes).length) ? Object.assign({},m.codes) : _parseCodes(DEFAULT_CODES_TEXT);   // 未保存・空保存は既定を使う
 }
 loadMasters();
 function canonVendor(v){ return VENDOR_ALIAS[v] || v; }           // 一致した別名を正式名へ
@@ -993,12 +1078,26 @@ function closeMaster(){ $('masterModal').style.display='none'; }
 function saveMaster(){
   const st=_codesStats($('m-codes')?$('m-codes').value:'');
   const m={ vendors:_lines($('m-vendors').value), accounts:_lines($('m-accounts').value), subs:_lines($('m-subs').value), aliases:_parseAlias($('m-aliases').value), codes:_parseCodes($('m-codes')?$('m-codes').value:'') };
+  // 空のマスタは loadMasters が既定へ戻すため、空のまま書き込むと以前の独自マスタが復旧できなくなる。
+  // 保存前に検証し、1つでも空なら localStorage に触らずモーダルを開いたまま警告する（原文は保持）
+  const empt=[];
+  if(!m.accounts.length) empt.push('勘定科目');
+  if(!m.subs.length)     empt.push('補助科目');
+  if(!m.vendors.length)  empt.push('店舗');
+  if(!Object.keys(m.codes).length) empt.push('サーチキー数字');
+  if(empt.length){
+    updateCodesCount();
+    toast(empt.join('・')+'が空のままでは保存できません（空にすると既定が使われます）。内容をご確認ください（この画面は開いたままです）', 10000);
+    return;
+  }
   try{ localStorage.setItem(clientKey('kv_masters'), JSON.stringify(m)); }
   catch(_){ toast('保存に失敗しました（容量超過の可能性）', 8000); return; }
   loadMasters(); fillDatalist('dl-acc', ACCOUNTS);   // 吸着リスト＋プルダウンに即反映
-  if(st.bad || st.dup){
-    // 保存はするが、直せるようモーダルは開いたまま警告（原文テキストエリアも保持）
-    const w=[]; if(st.bad) w.push('読み取れない行が'+st.bad+'件（無視しました）'); if(st.dup) w.push('コードの重複が'+st.dup+'件（後の行を優先）');
+  // 保存はするが、直せるようモーダルは開いたまま警告（原文テキストエリアも保持）
+  const w=[];
+  if(st.bad) w.push('読み取れない行が'+st.bad+'件（無視しました）');
+  if(st.dup) w.push('コードの重複が'+st.dup+'件（後の行を優先）');
+  if(w.length){
     updateCodesCount();
     toast('マスタを保存しました。'+w.join('／')+'／内容をご確認ください（この画面は開いたままです）', 10000);
   } else { closeMaster(); toast('マスタを保存しました'); }
@@ -1018,7 +1117,22 @@ function importCodesFile(file){
     const n=Object.keys(res.codes).length;
     if(!n){ toast('科目コードを検出できませんでした（書式をご確認ください）', 8000); return; }
     const skipped = res.bad ? '\n読み取れなかった行：'+res.bad+'行（無視します）' : '';
-    if(!confirm(n+'件の科目コードを検出しました。'+skipped+'\n現在のコード表を上書きします。よろしいですか？\n（「保存」を押すまで確定しません）')) return;
+    // 重複は件数だけでなく「どれがどれを上書きしたか」まで見せる
+    const dupMsg = res.dup ? '\n同じコードの重複が'+res.dup+'件（後の行を優先）'
+      + (res.dupList && res.dupList.length ? '：'+res.dupList.join(' ／ ') : '') : '';
+    // サーチキー数字が未設定で見送った科目の件数（黙って消えると件数が合わない）
+    const noCodeMsg = res.noCode ? '\nコード未設定で見送り '+res.noCode+'件' : '';
+    // 顧問先を取り違えたファイルの取込を防ぐため、帳票名・事業所名が読めたら必ず見せる（片方だけでも表示）
+    let src='';
+    if(res.title) src = res.title;
+    if(res.office) src = src ? (src+'（'+res.office+'）') : res.office;
+    if(src) src += 'から';
+    // 誤パース（科目名の代わりに「借方」等が入る等）に上書き前に気づけるよう、必ずサンプルを見せる。
+    // 先頭3件だと末尾の崩れに気づけないので、先頭・中間・末尾から1件ずつ
+    const ks=Object.keys(res.codes);
+    const idx = (ks.length<=3) ? ks.map((_,i)=>i) : [0, Math.floor(ks.length/2), ks.length-1];
+    const sample='\n例: '+idx.map(i=>ks[i]+'→'+res.codes[ks[i]]).join(' ／ ')+(ks.length>3?'（先頭・中間・末尾）':'');
+    if(!confirm(src+n+'件の科目コードを検出しました。'+sample+skipped+noCodeMsg+dupMsg+'\n現在のコード表を上書きします。よろしいですか？\n（「保存」を押すまで確定しません）')) return;
     $('m-codes').value = _codesText(res.codes);
     // 勘定科目マスタに無い科目名の追記も確認
     const cur=_lines($('m-accounts').value), add=res.names.filter(v=>cur.indexOf(v)<0);
